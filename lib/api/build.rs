@@ -102,26 +102,26 @@ fn build_wamr() {
         dst.define("WAMR_BUILD_LIBC_UVWASI", "0");
     }
 
-    //if target_os == "ios" {
-    //    // XXX: Hacky
-    //    //
-    //    // Compiling wamr targeting `aarch64-apple-ios` results in
-    //    //
-    //    // ```
-    //    //  clang: error: unsupported option '-mfloat-abi=' for target 'aarch64-apple-ios'
-    //    // ```
-    //    // So, here, we simply remove that setting.
-    //    //
-    //    // See: https://github.com/bytecodealliance/wasm-micro-runtime/pull/3889
-    //    let mut lines = vec![];
-    //    let cmake_file_path = wamr_platform_dir.join("CMakeLists.txt");
-    //    for line in std::fs::read_to_string(&cmake_file_path).unwrap().lines() {
-    //        if !line.contains("-mfloat-abi=hard") {
-    //            lines.push(line.to_string())
-    //        }
-    //    }
-    //    std::fs::write(cmake_file_path, lines.join("\n")).unwrap();
-    //}
+    if target_os == "ios" {
+        // XXX: Hacky
+        //
+        // Compiling wamr targeting `aarch64-apple-ios` results in
+        //
+        // ```
+        //  clang: error: unsupported option '-mfloat-abi=' for target 'aarch64-apple-ios'
+        // ```
+        // So, here, we simply remove that setting.
+        //
+        // See: https://github.com/bytecodealliance/wasm-micro-runtime/pull/3889
+        let mut lines = vec![];
+        let cmake_file_path = wamr_platform_dir.join("CMakeLists.txt");
+        for line in std::fs::read_to_string(&cmake_file_path).unwrap().lines() {
+            if !line.contains("-mfloat-abi=hard") {
+                lines.push(line.to_string())
+            }
+        }
+        std::fs::write(cmake_file_path, lines.join("\n")).unwrap();
+    }
 
     let dst = dst.build();
 
@@ -158,7 +158,7 @@ fn build_wamr() {
         }
     }
 
-    let bindings = bindgen::Builder::default()
+    let mut builder = bindgen::Builder::default()
         .header(
             wamr_dir
                 .join("core/iwasm/include/wasm_c_api.h")
@@ -167,7 +167,18 @@ fn build_wamr() {
         )
         .derive_default(true)
         .derive_debug(true)
-        .parse_callbacks(Box::new(WamrRenamer {}))
+        .parse_callbacks(Box::new(WamrRenamer {}));
+
+    // Add iOS SDK include paths for bindgen
+    if target_os == "ios" {
+        let sdk_path = env::var("SDKROOT")
+            .unwrap_or_else(|_| "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk".to_string());
+        builder = builder
+            .clang_arg(format!("-isysroot{}", sdk_path))
+            .clang_arg(format!("--target={}", env::var("TARGET").unwrap()));
+    }
+
+    let bindings = builder
         .generate()
         .expect("Unable to generate bindings");
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -214,10 +225,24 @@ fn build_wamr() {
                 }
             })
             .collect();
+
+        // iOS builds produce a dylib in a different location
+        let (input_lib, output_lib) = if target_os == "ios" {
+            (
+                dst.join("build").join("distribution").join("wasm").join("lib").join("libiwasm.dylib"),
+                dst.join("build").join("libwamr.dylib"),
+            )
+        } else {
+            (
+                dst.join("build").join("libvmlib.a"),
+                dst.join("build").join("libwamr.a"),
+            )
+        };
+
         let output = std::process::Command::new(objcopy)
             .args(syms)
-            .arg(dst.join("build").join("libvmlib.a").display().to_string())
-            .arg(dst.join("build").join("libwamr.a").display().to_string())
+            .arg(input_lib.display().to_string())
+            .arg(output_lib.display().to_string())
             .output()
             .unwrap();
 
@@ -234,7 +259,11 @@ fn build_wamr() {
         "cargo:rustc-link-search=native={}",
         dst.join("build").display()
     );
-    println!("cargo:rustc-link-lib=static=wamr");
+    if target_os == "ios" {
+        println!("cargo:rustc-link-lib=dylib=wamr");
+    } else {
+        println!("cargo:rustc-link-lib=static=wamr");
+    }
 }
 
 #[cfg(feature = "v8")]
