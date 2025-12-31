@@ -166,7 +166,7 @@ pub fn proc_spawn2<M: MemorySize>(
             let env = builder.take().unwrap();
 
             // Spawn a new process with this current execution environment
-            InlineWaker::block_on(bin_factory.spawn(name, env))
+            block_on(bin_factory.spawn(name, env))
         }
     };
 
@@ -193,26 +193,31 @@ fn apply_fd_op<M: MemorySize>(
 ) -> Result<(), Errno> {
     match op.cmd {
         ProcSpawnFdOpName::Close => {
-            if let Ok(fd) = env.state.fs.get_fd(op.fd) {
-                if !fd.is_stdio && fd.inode.is_preopened {
-                    trace!("Skipping close FD action for pre-opened FD ({})", op.fd);
-                    return Ok(());
-                }
+            if let Ok(fd) = env.state.fs.get_fd(op.fd)
+                && !fd.is_stdio
+                && fd.inode.is_preopened
+            {
+                trace!("Skipping close FD action for pre-opened FD ({})", op.fd);
+                return Ok(());
             }
             env.state.fs.close_fd(op.fd)
         }
         ProcSpawnFdOpName::Dup2 => {
-            if let Ok(fd) = env.state.fs.get_fd(op.fd) {
-                if !fd.is_stdio && fd.inode.is_preopened {
-                    warn!(
-                        "FD {} is a pre-open and should not be closed, \
+            if let Ok(fd) = env.state.fs.get_fd(op.fd)
+                && !fd.is_stdio
+                && fd.inode.is_preopened
+            {
+                warn!(
+                    "FD {} is a pre-open and should not be closed, \
                         but will be closed in response to a dup2 FD action. \
                         This will likely break stuff.",
-                        op.fd
-                    );
-                }
+                    op.fd
+                );
             }
-            if env.state.fs.get_fd(op.fd).is_ok() {
+
+            // According to POSIX dup2 semantics, the target fd should always be closed before duplication
+            // EXCEPT when duplicating a fd to itself (src_fd == fd), which is a no-op.
+            if op.src_fd != op.fd && env.state.fs.get_fd(op.fd).is_ok() {
                 env.state.fs.close_fd(op.fd)?;
             }
 
@@ -287,5 +292,6 @@ fn apply_fd_op<M: MemorySize>(
                 _ => Err(Errno::Notdir),
             }
         }
+        _ => Err(Errno::Inval),
     }
 }

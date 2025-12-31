@@ -1,3 +1,14 @@
+use super::{
+    control_plane::TaskCountGuard,
+    task_join_handle::{OwnedTaskStatus, TaskJoinHandle},
+};
+use crate::{
+    WasiRuntimeError,
+    os::task::process::{WasiProcessId, WasiProcessInner},
+    state::LinkError,
+    syscalls::HandleRewindType,
+};
+use bytes::{Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
@@ -6,25 +17,11 @@ use std::{
     sync::{Arc, Condvar, Mutex, Weak},
     task::Waker,
 };
-
-use bytes::{Bytes, BytesMut};
 use wasmer::{ExportError, InstantiationError, MemoryError};
 use wasmer_wasix_types::{
     types::Signal,
     wasi::{Errno, ExitCode},
     wasix::ThreadStartType,
-};
-
-use crate::{
-    WasiRuntimeError,
-    os::task::process::{WasiProcessId, WasiProcessInner},
-    state::LinkError,
-    syscalls::HandleRewindType,
-};
-
-use super::{
-    control_plane::TaskCountGuard,
-    task_join_handle::{OwnedTaskStatus, TaskJoinHandle},
 };
 
 /// Represents the ID of a WASI thread
@@ -470,15 +467,15 @@ impl WasiThread {
 
                 // Output debug info for the dead stack
                 let mut disown = Some(Box::new(new_stack));
-                if let Some(disown) = disown.as_ref() {
-                    if !disown.snapshots.is_empty() {
-                        tracing::trace!(
-                            "wasi[{}]::stacks forgotten (memory_stack_before={}, memory_stack_after={})",
-                            self.pid(),
-                            memory_stack_before,
-                            memory_stack_after
-                        );
-                    }
+                if let Some(disown) = disown.as_ref()
+                    && !disown.snapshots.is_empty()
+                {
+                    tracing::trace!(
+                        "wasi[{}]::stacks forgotten (memory_stack_before={}, memory_stack_after={})",
+                        self.pid(),
+                        memory_stack_before,
+                        memory_stack_after
+                    );
                 }
                 let mut total_forgotten = 0usize;
                 while let Some(disowned) = disown {

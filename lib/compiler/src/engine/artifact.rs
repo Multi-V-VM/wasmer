@@ -377,6 +377,7 @@ impl Artifact {
             ArtifactBuildVariant::Plain(p) => link_module(
                 module_info,
                 &finished_functions,
+                &finished_dynamic_function_trampolines,
                 p.get_function_relocations()
                     .iter()
                     .map(|(k, v)| (k, v.iter())),
@@ -391,6 +392,7 @@ impl Artifact {
             ArtifactBuildVariant::Archived(a) => link_module(
                 module_info,
                 &finished_functions,
+                &finished_dynamic_function_trampolines,
                 a.get_function_relocations()
                     .iter()
                     .map(|(k, v)| (k, v.iter())),
@@ -452,7 +454,7 @@ impl Artifact {
             get_got_address(RelocationTarget::LibCall(wasmer_vm::LibCall::EHPersonality)),
         )?;
 
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(not(target_arch = "wasm32"), feature = "compiler"))]
         {
             engine_inner.register_perfmap(&finished_functions, module_info)?;
         }
