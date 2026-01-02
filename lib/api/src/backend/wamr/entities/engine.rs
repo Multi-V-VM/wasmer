@@ -24,10 +24,82 @@ impl Drop for CApiEngine {
     }
 }
 
-/// The engine for the Web Assembly Micro Runtime.
+/// MVVM checkpoint configuration.
+///
+/// Controls how checkpoints are taken and at what granularity.
+#[cfg(feature = "mvvm")]
 #[derive(Clone, Debug, Default)]
+pub struct MvvmConfig {
+    /// Enable checkpoint/restore support
+    pub checkpoint_enabled: bool,
+
+    /// Enable AOT compilation for optimized checkpoint (required for best performance)
+    pub aot_checkpoint: bool,
+
+    /// Checkpoint granularity level
+    pub checkpoint_granularity: MvvmCheckpointGranularity,
+}
+
+/// Checkpoint granularity levels.
+///
+/// Finer granularity allows checkpoints at more locations but with higher overhead.
+#[cfg(feature = "mvvm")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MvvmCheckpointGranularity {
+    /// Checkpoints only at function entry/exit (lowest overhead)
+    #[default]
+    Function = 0,
+    /// Checkpoints at loop iteration boundaries
+    Loop = 1,
+    /// Checkpoints at any instruction (highest overhead, most flexibility)
+    Instruction = 2,
+}
+
+#[cfg(feature = "mvvm")]
+impl MvvmConfig {
+    /// Creates a new MVVM config with checkpoint support enabled.
+    pub fn enabled() -> Self {
+        Self {
+            checkpoint_enabled: true,
+            aot_checkpoint: false,
+            checkpoint_granularity: MvvmCheckpointGranularity::Function,
+        }
+    }
+
+    /// Creates a new MVVM config with AOT checkpoint support.
+    pub fn with_aot() -> Self {
+        Self {
+            checkpoint_enabled: true,
+            aot_checkpoint: true,
+            checkpoint_granularity: MvvmCheckpointGranularity::Function,
+        }
+    }
+
+    /// Sets the checkpoint granularity.
+    pub fn with_granularity(mut self, granularity: MvvmCheckpointGranularity) -> Self {
+        self.checkpoint_granularity = granularity;
+        self
+    }
+}
+
+/// The engine for the Web Assembly Micro Runtime.
+#[derive(Clone, Debug)]
 pub struct Engine {
     pub(crate) inner: Arc<CApiEngine>,
+    /// MVVM configuration (when feature is enabled)
+    #[cfg(feature = "mvvm")]
+    pub(crate) mvvm_config: Option<MvvmConfig>,
+}
+
+impl Default for Engine {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(CApiEngine::default()),
+            #[cfg(feature = "mvvm")]
+            mvvm_config: None,
+        }
+    }
 }
 
 impl Engine {
@@ -36,7 +108,34 @@ impl Engine {
         Self::default()
     }
 
+    /// Creates a new engine with MVVM checkpoint support.
+    #[cfg(feature = "mvvm")]
+    pub fn new_with_mvvm(config: MvvmConfig) -> Self {
+        Self {
+            inner: Arc::new(CApiEngine::default()),
+            mvvm_config: Some(config),
+        }
+    }
+
+    /// Returns the MVVM configuration if enabled.
+    #[cfg(feature = "mvvm")]
+    pub fn mvvm_config(&self) -> Option<&MvvmConfig> {
+        self.mvvm_config.as_ref()
+    }
+
+    /// Returns true if MVVM checkpoint support is enabled.
+    #[cfg(feature = "mvvm")]
+    pub fn is_mvvm_enabled(&self) -> bool {
+        self.mvvm_config
+            .as_ref()
+            .map_or(false, |c| c.checkpoint_enabled)
+    }
+
     pub(crate) fn deterministic_id(&self) -> String {
+        #[cfg(feature = "mvvm")]
+        if self.is_mvvm_enabled() {
+            return String::from("wamr-mvvm");
+        }
         String::from("wamr")
     }
 

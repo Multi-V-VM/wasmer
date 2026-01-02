@@ -230,6 +230,40 @@ pub struct Wasi {
     /// generated artifacts are cached.
     #[clap(long = "disable-cache")]
     disable_cache: bool,
+
+    /// Enable MVVM checkpointing support for live migration.
+    ///
+    /// When enabled, the WebAssembly execution can be checkpointed and
+    /// restored on the same or different architecture.
+    #[cfg(feature = "mvvm")]
+    #[clap(long = "enable-mvvm-checkpoint")]
+    pub enable_mvvm_checkpoint: bool,
+
+    /// Output file for MVVM checkpoint when checkpointing is triggered.
+    ///
+    /// The checkpoint will be written to this file when the module exits
+    /// or when a checkpoint signal is received.
+    #[cfg(feature = "mvvm")]
+    #[clap(long = "mvvm-checkpoint-output")]
+    pub mvvm_checkpoint_output: Option<PathBuf>,
+
+    /// Restore execution from an MVVM checkpoint file.
+    ///
+    /// The module will resume execution from the saved state in the
+    /// checkpoint file. This works across different architectures.
+    #[cfg(feature = "mvvm")]
+    #[clap(long = "mvvm-restore-from")]
+    pub mvvm_restore_from: Option<PathBuf>,
+
+    /// MVVM checkpoint granularity: function, loop, or instruction.
+    ///
+    /// Controls how frequently checkpoints can be taken:
+    /// - function: Only at function call boundaries (fastest, least flexible)
+    /// - loop: At loop headers and function calls (balanced)
+    /// - instruction: At any instruction (slowest, most flexible)
+    #[cfg(feature = "mvvm")]
+    #[clap(long = "mvvm-granularity", default_value = "function")]
+    pub mvvm_granularity: String,
 }
 
 pub struct RunProperties {

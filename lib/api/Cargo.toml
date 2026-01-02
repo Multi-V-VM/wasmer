@@ -40,6 +40,10 @@ tracing = { workspace = true, default-features = true }
 wat = { workspace = true, optional = true }
 rustc-demangle.workspace = true
 shared-buffer.workspace = true
+# - MVVM migration dependencies
+serde = { workspace = true, optional = true, features = ["derive"] }
+bincode = { workspace = true, optional = true }
+lz4_flex = { workspace = true, optional = true }
 
 wasmi_c_api_impl = { workspace = true, optional = true, features = [
 	"prefix-symbols",
@@ -150,6 +154,11 @@ llvm = ["compiler", "wasmer-compiler-llvm"]
 wamr-default = ["wamr", "wat"]
 # --- Enable the WAMR backend and use it as defaul backend only if it is the only one enabled.
 wamr = ["wasm-c-api", "std", "dep:which", "dep:zip", "dep:ureq"]
+
+# --- Enable MVVM (Multi-V-VM) live migration support on top of WAMR backend.
+# This provides checkpoint/restore capabilities for cross-architecture migration.
+mvvm = ["wamr", "dep:serde", "dep:bincode", "dep:lz4_flex"]
+mvvm-default = ["mvvm", "wat"]
 
 # --- Enable the wasmi backend and use it as default backend.
 wasmi = ["wasm-c-api", "std", "dep:wasmi_c_api_impl"]

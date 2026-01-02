@@ -23,6 +23,8 @@ mod init;
 mod inspect;
 #[cfg(feature = "journal")]
 mod journal;
+#[cfg(feature = "mvvm")]
+mod migrate;
 pub(crate) mod namespace;
 mod package;
 mod run;
@@ -50,6 +52,8 @@ pub use {create_obj::*, gen_c_header::*};
 
 #[cfg(feature = "journal")]
 pub use self::journal::*;
+#[cfg(feature = "mvvm")]
+pub use self::migrate::*;
 pub use self::{
     add::*, auth::*, cache::*, config::*, container::*, init::*, inspect::*, package::*,
     publish::*, run::Run, self_update::*, validate::*,
@@ -216,6 +220,8 @@ impl WasmerCmd {
             Some(Cmd::App(apps)) => apps.run(),
             #[cfg(feature = "journal")]
             Some(Cmd::Journal(journal)) => journal.run(),
+            #[cfg(feature = "mvvm")]
+            Some(Cmd::Migrate(migrate)) => migrate.run(),
             Some(Cmd::Ssh(ssh)) => ssh.run(),
             Some(Cmd::Namespace(namespace)) => namespace.run(),
             Some(Cmd::Domain(namespace)) => namespace.run(),
@@ -462,6 +468,11 @@ enum Cmd {
     #[cfg(feature = "journal")]
     #[clap(subcommand)]
     Journal(CmdJournal),
+
+    /// MVVM live migration commands (checkpoint, restore)
+    #[cfg(feature = "mvvm")]
+    #[clap(subcommand)]
+    Migrate(CmdMigrate),
 
     #[clap(subcommand)]
     Package(crate::commands::Package),

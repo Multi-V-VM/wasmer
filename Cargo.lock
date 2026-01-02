@@ -6719,6 +6719,7 @@ name = "wasmer"
 version = "6.1.0"
 dependencies = [
  "anyhow",
+ "bincode 2.0.1",
  "bindgen",
  "bytes",
  "cfg-if",
@@ -6730,6 +6731,7 @@ dependencies = [
  "indexmap 2.12.1",
  "js-sys",
  "loupe",
+ "lz4_flex",
  "macro-wasmer-universal-test",
  "more-asserts",
  "paste",
@@ -6938,6 +6940,7 @@ dependencies = [
  "interfaces",
  "libc",
  "log",
+ "lz4_flex",
  "lzma-rs",
  "mac_address",
  "mio",

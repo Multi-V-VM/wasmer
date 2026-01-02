@@ -89,6 +89,11 @@ mod save_event;
 mod thread_exit;
 #[cfg(feature = "journal")]
 mod thread_state;
+#[cfg(feature = "journal")]
+pub mod mvvm_adapter;
+
+#[cfg(feature = "journal")]
+pub use mvvm_adapter::{MvvmCheckpoint, MvvmJournalAdapter, MvvmJournalReader, MvvmTargetArch};
 
 /// The journal effector is an adapter that will be removed in a future refactor.
 /// Its purpose is to put the code that does mappings from WASM memory through its

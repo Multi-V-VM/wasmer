@@ -269,6 +269,207 @@ fn build_wamr() {
     }
 }
 
+#[cfg(feature = "mvvm")]
+fn build_mvvm() {
+    use bindgen::callbacks::ParseCallbacks;
+    use cmake::Config;
+    use std::{env, path::PathBuf, process::Command};
+
+    // MVVM is built on top of WAMR with checkpoint/restore support
+    const MVVM_REPO: &str = "https://github.com/Multi-V-VM/MVVM.git";
+
+    let crate_root = env::var("OUT_DIR").unwrap();
+
+    // Read target os from cargo env
+    let target_os = match env::var("CARGO_CFG_TARGET_OS").unwrap().as_str() {
+        "linux" => "linux",
+        "windows" => "windows",
+        "macos" => "darwin",
+        "freebsd" => "freebsd",
+        "android" => "android",
+        other => panic!("MVVM unsupported CARGO_CFG_TARGET_OS: {other}"),
+    };
+
+    // Read target arch from cargo env
+    let target_arch = match env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
+        "x86_64" => "X86_64",
+        "aarch64" => "AARCH64",
+        "riscv64" => "RISCV64",
+        other => panic!("MVVM unsupported CARGO_CFG_TARGET_ARCH: {other}"),
+    };
+
+    // Clone MVVM with submodules (required for wasm-micro-runtime, s2n-tls, etc.)
+    let mvvm_dir = PathBuf::from(&crate_root).join("third_party/mvvm");
+    if !mvvm_dir.exists() {
+        let third_party_dir = PathBuf::from(&crate_root).join("third_party");
+        std::fs::create_dir_all(&third_party_dir)
+            .expect("Failed to create third_party directory");
+
+        // Clone with recursive submodules
+        let status = Command::new("git")
+            .args([
+                "clone",
+                "--recursive",
+                "--depth=1",
+                MVVM_REPO,
+                mvvm_dir.to_str().unwrap(),
+            ])
+            .status()
+            .expect("Failed to run git clone for MVVM");
+
+        if !status.success() {
+            panic!("git clone --recursive failed for MVVM repository");
+        }
+    } else {
+        println!("cargo::rerun-if-changed={}", mvvm_dir.display());
+    }
+
+    // Build MVVM with checkpoint/restore support enabled
+    let mvvm_build_dir = mvvm_dir.clone();
+    let mut dst = Config::new(mvvm_build_dir.as_path());
+
+    dst.always_configure(true)
+        .generator("Ninja")
+        .no_build_target(true)
+        .define(
+            "CMAKE_BUILD_TYPE",
+            if cfg!(debug_assertions) {
+                "RelWithDebInfo"
+            } else {
+                "Release"
+            },
+        )
+        .define("CMAKE_POLICY_VERSION_MINIMUM", "3.5")
+        // Enable checkpoint/restore support - key for MVVM
+        .define("WAMR_BUILD_CHECKPOINT_RESTORE", "1")
+        .define("WAMR_BUILD_DUMP_CALL_STACK", "1")
+        .define("WAMR_BUILD_AOT", "1")
+        // Standard WAMR features
+        .define("WAMR_BUILD_BULK_MEMORY", "1")
+        .define("WAMR_BUILD_REF_TYPES", "1")
+        .define("WAMR_BUILD_SIMD", "1")
+        .define("WAMR_BUILD_FAST_INTERP", "1")
+        .define("WAMR_BUILD_LIB_PTHREAD", "1")
+        .define("WAMR_BUILD_LIBC_WASI", "0")
+        .define("WAMR_BUILD_LIBC_BUILTIN", "0")
+        .define("WAMR_BUILD_SHARED_MEMORY", "1")
+        .define("WAMR_BUILD_MULTI_MODULE", "1")
+        .define("WAMR_DISABLE_HW_BOUND_CHECK", "1")
+        .define("WAMR_BUILD_TARGET", target_arch);
+
+    if target_os == "windows" {
+        dst.define("CMAKE_CXX_COMPILER", "cl.exe");
+        dst.define("CMAKE_C_COMPILER", "cl.exe");
+        dst.define("CMAKE_LINKER_TYPE", "MSVC");
+        dst.define("WAMR_BUILD_PLATFORM", "windows");
+    }
+
+    let dst = dst.build();
+
+    // Generate bindings for MVVM-specific headers
+    // Rename symbols to avoid conflicts with regular WAMR
+    static mut MVVM_RENAMED: Vec<(String, String)> = vec![];
+
+    #[derive(Debug)]
+    struct MvvmRenamer {}
+    impl ParseCallbacks for MvvmRenamer {
+        fn generated_link_name_override(
+            &self,
+            item_info: bindgen::callbacks::ItemInfo<'_>,
+        ) -> Option<String> {
+            // Rename wasm* and mvvm* symbols
+            if item_info.name.starts_with("wasm") || item_info.name.starts_with("mvvm") {
+                let new_name = format!("mvvm_{}", item_info.name);
+                #[allow(static_mut_refs)]
+                unsafe {
+                    MVVM_RENAMED.push((item_info.name.to_string(), new_name.clone()));
+                }
+                Some(new_name)
+            } else {
+                None
+            }
+        }
+    }
+
+    // Generate bindings for MVVM checkpoint API
+    let mvvm_header = mvvm_dir.join("include/mvvm_checkpoint.h");
+    let wasm_c_api_header = mvvm_dir.join("wamr/core/iwasm/include/wasm_c_api.h");
+
+    // Use wasm_c_api.h if mvvm-specific header doesn't exist
+    let header_to_use = if mvvm_header.exists() {
+        mvvm_header
+    } else {
+        wasm_c_api_header
+    };
+
+    let bindings = bindgen::Builder::default()
+        .header(header_to_use.to_str().unwrap())
+        .derive_default(true)
+        .derive_debug(true)
+        .parse_callbacks(Box::new(MvvmRenamer {}))
+        .generate()
+        .expect("Unable to generate MVVM bindings");
+
+    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let bindings_path = out_path.join("mvvm_bindings.rs");
+    bindings
+        .write_to_file(&bindings_path)
+        .expect("Couldn't write MVVM bindings");
+
+    // Rename symbols in the library using objcopy
+    let objcopy_names = ["llvm-objcopy", "objcopy", "gobjcopy"];
+    let mut objcopy = None;
+    for n in objcopy_names {
+        if which::which(n).is_ok() {
+            objcopy = Some(n);
+            break;
+        }
+    }
+
+    if let Some(objcopy) = objcopy {
+        #[allow(static_mut_refs)]
+        unsafe {
+            let syms: Vec<String> = MVVM_RENAMED
+                .iter()
+                .map(|(old, new)| {
+                    if cfg!(any(target_os = "macos", target_os = "ios")) {
+                        format!("--redefine-sym=_{old}={new}")
+                    } else {
+                        format!("--redefine-sym={old}={new}")
+                    }
+                })
+                .collect();
+
+            // Find the built library (name may vary by MVVM version)
+            let input_lib = dst.join("build").join("libvmlib.a");
+            let output_lib = dst.join("build").join("libmvvm.a");
+
+            if input_lib.exists() {
+                let output = std::process::Command::new(objcopy)
+                    .args(syms)
+                    .arg(input_lib.display().to_string())
+                    .arg(output_lib.display().to_string())
+                    .output()
+                    .unwrap();
+
+                if !output.status.success() {
+                    eprintln!(
+                        "{objcopy} failed with error code {}: {}",
+                        output.status,
+                        String::from_utf8(output.stderr).unwrap_or_default()
+                    );
+                }
+            }
+        }
+    }
+
+    println!(
+        "cargo:rustc-link-search=native={}",
+        dst.join("build").display()
+    );
+    println!("cargo:rustc-link-lib=static=mvvm");
+}
+
 #[cfg(feature = "v8")]
 fn build_v8() {
     use bindgen::callbacks::ParseCallbacks;
@@ -521,6 +722,9 @@ fn build_wasmi() {
 fn main() {
     #[cfg(feature = "wamr")]
     build_wamr();
+
+    #[cfg(feature = "mvvm")]
+    build_mvvm();
 
     #[cfg(feature = "v8")]
     build_v8();

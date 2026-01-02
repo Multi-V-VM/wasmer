@@ -52,6 +52,7 @@ coredump = ["wasm-coredump-builder"]
 sys = ["compiler", "dep:wasmer-vm"]
 v8 = ["backend", "wasmer/v8"]
 wamr = ["backend", "wasmer/wamr"]
+mvvm = ["wamr", "wasmer/mvvm", "journal", "dep:lz4_flex"]
 wasmi = ["backend", "wasmer/wasmi"]
 jsc = ["backend", "wasmer/jsc", "wasmer/std"]
 wast = ["wasmer-wast"]
@@ -183,6 +184,7 @@ log.workspace = true
 semver.workspace = true
 pathdiff.workspace = true
 sha2.workspace = true
+lz4_flex = { workspace = true, optional = true }
 object.workspace = true
 wasm-coredump-builder = { workspace = true, optional = true }
 tracing.workspace = true

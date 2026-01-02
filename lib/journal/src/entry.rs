@@ -393,6 +393,55 @@ pub enum JournalEntry<'a> {
         when: SystemTime,
         trigger: SnapshotTrigger,
     },
+
+    // MVVM (Multi-V-VM) live migration entries
+
+    /// MVVM full checkpoint for live migration.
+    /// Contains the complete execution state captured by MVVM.
+    MvvmCheckpointV1 {
+        /// Checkpoint format version
+        version: u32,
+        /// Source architecture (0=x86_64, 1=aarch64, 2=riscv64)
+        source_arch: u8,
+        /// Module hash for validation
+        module_hash: Box<[u8]>,
+        /// Compressed MVVM checkpoint data (LZ4)
+        #[debug(ignore)]
+        #[serde(with = "base64")]
+        checkpoint_data: Cow<'a, [u8]>,
+        /// Timestamp when checkpoint was taken
+        when: SystemTime,
+    },
+
+    /// MVVM incremental checkpoint (delta from previous checkpoint).
+    /// Used for efficient periodic checkpointing.
+    MvvmIncrementalCheckpointV1 {
+        /// ID of the base checkpoint this delta applies to
+        base_checkpoint_id: u64,
+        /// Compressed memory delta (only changed regions)
+        #[debug(ignore)]
+        #[serde(with = "base64")]
+        memory_delta: Cow<'a, [u8]>,
+        /// Compressed stack state changes
+        #[debug(ignore)]
+        #[serde(with = "base64")]
+        stack_delta: Cow<'a, [u8]>,
+        /// Timestamp when checkpoint was taken
+        when: SystemTime,
+    },
+
+    /// Migration request marker.
+    /// Indicates a request to migrate the process to another host/architecture.
+    MigrationRequestV1 {
+        /// Target architecture (0=x86_64, 1=aarch64, 2=riscv64)
+        target_arch: u8,
+        /// Target endpoint information (host:port or identifier)
+        target_endpoint: Cow<'a, str>,
+        /// Migration priority (0=low, 1=normal, 2=high, 3=urgent)
+        priority: u8,
+        /// Timestamp of the request
+        when: SystemTime,
+    },
 }
 
 impl JournalEntry<'_> {
@@ -772,6 +821,42 @@ impl JournalEntry<'_> {
             }
             Self::SocketShutdownV1 { fd, how } => JournalEntry::SocketShutdownV1 { fd, how },
             Self::SnapshotV1 { when, trigger } => JournalEntry::SnapshotV1 { when, trigger },
+            // MVVM entries
+            Self::MvvmCheckpointV1 {
+                version,
+                source_arch,
+                module_hash,
+                checkpoint_data,
+                when,
+            } => JournalEntry::MvvmCheckpointV1 {
+                version,
+                source_arch,
+                module_hash,
+                checkpoint_data: checkpoint_data.into_owned().into(),
+                when,
+            },
+            Self::MvvmIncrementalCheckpointV1 {
+                base_checkpoint_id,
+                memory_delta,
+                stack_delta,
+                when,
+            } => JournalEntry::MvvmIncrementalCheckpointV1 {
+                base_checkpoint_id,
+                memory_delta: memory_delta.into_owned().into(),
+                stack_delta: stack_delta.into_owned().into(),
+                when,
+            },
+            Self::MigrationRequestV1 {
+                target_arch,
+                target_endpoint,
+                priority,
+                when,
+            } => JournalEntry::MigrationRequestV1 {
+                target_arch,
+                target_endpoint: target_endpoint.into_owned().into(),
+                priority,
+                when,
+            },
         }
     }
 
@@ -856,6 +941,20 @@ impl JournalEntry<'_> {
             JournalEntry::SocketSetOptTimeV1 { .. } => base_size,
             JournalEntry::SocketShutdownV1 { .. } => base_size,
             JournalEntry::SnapshotV1 { .. } => base_size,
+            // MVVM entries
+            JournalEntry::MvvmCheckpointV1 {
+                checkpoint_data,
+                module_hash,
+                ..
+            } => base_size + checkpoint_data.len() + module_hash.len(),
+            JournalEntry::MvvmIncrementalCheckpointV1 {
+                memory_delta,
+                stack_delta,
+                ..
+            } => base_size + memory_delta.len() + stack_delta.len(),
+            JournalEntry::MigrationRequestV1 {
+                target_endpoint, ..
+            } => base_size + target_endpoint.len(),
         }
     }
 }
