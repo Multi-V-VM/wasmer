@@ -324,9 +324,12 @@ fn build_mvvm() {
         println!("cargo::rerun-if-changed={}", mvvm_dir.display());
     }
 
-    // Build MVVM with checkpoint/restore support enabled
-    let mvvm_build_dir = mvvm_dir.clone();
-    let mut dst = Config::new(mvvm_build_dir.as_path());
+    // Build MVVM's WAMR fork directly (bypasses main MVVM CMakeLists which enables too many features)
+    // The WAMR fork at lib/wasm-micro-runtime has checkpoint/restore support
+    let wamr_platform_dir = mvvm_dir
+        .join("lib/wasm-micro-runtime/product-mini/platforms")
+        .join(target_os);
+    let mut dst = Config::new(wamr_platform_dir.as_path());
 
     dst.always_configure(true)
         .generator("Ninja")
@@ -341,20 +344,42 @@ fn build_mvvm() {
         )
         .define("CMAKE_POLICY_VERSION_MINIMUM", "3.5")
         // Enable checkpoint/restore support - key for MVVM
+        // MVVM requires AOT mode for checkpoint support
         .define("WAMR_BUILD_CHECKPOINT_RESTORE", "1")
         .define("WAMR_BUILD_DUMP_CALL_STACK", "1")
+        .define("WAMR_BUILD_CUSTOM_NAME_SECTION", "1")
+        // Enable AOT only (required for MVVM checkpoint)
         .define("WAMR_BUILD_AOT", "1")
+        .define("WAMR_BUILD_INTERP", "0") // Disable interpreter, AOT only
+        .define("WAMR_BUILD_JIT", "0")
+        .define("WAMR_BUILD_FAST_JIT", "0")
         // Standard WAMR features
         .define("WAMR_BUILD_BULK_MEMORY", "1")
         .define("WAMR_BUILD_REF_TYPES", "1")
         .define("WAMR_BUILD_SIMD", "1")
-        .define("WAMR_BUILD_FAST_INTERP", "1")
+        .define("WAMR_BUILD_FAST_INTERP", "0")
         .define("WAMR_BUILD_LIB_PTHREAD", "1")
+        .define("WAMR_BUILD_LIB_PTHREAD_SEMAPHORE", "0")
+        .define("WAMR_BUILD_LIB_WASI_THREADS", "0")
         .define("WAMR_BUILD_LIBC_WASI", "0")
         .define("WAMR_BUILD_LIBC_BUILTIN", "0")
         .define("WAMR_BUILD_SHARED_MEMORY", "1")
         .define("WAMR_BUILD_MULTI_MODULE", "1")
         .define("WAMR_DISABLE_HW_BOUND_CHECK", "1")
+        // Disable WASI-NN and other heavy dependencies
+        .define("WAMR_BUILD_WASI_NN", "0")
+        .define("WAMR_BUILD_WASI_NN_ENABLE_GPU", "0")
+        .define("WAMR_BUILD_WASI_NN_EXTERNAL_DELEGATE", "0")
+        .define("WAMR_BUILD_WASI_EPHEMERAL_NN", "0")
+        // Disable other optional features
+        .define("WAMR_BUILD_DEBUG_INTERP", "0")
+        .define("WAMR_BUILD_DEBUG_AOT", "0")
+        .define("WAMR_BUILD_MINI_LOADER", "0")
+        .define("WAMR_BUILD_MEMORY_PROFILING", "0")
+        .define("WAMR_BUILD_PERF_PROFILING", "0")
+        .define("WAMR_BUILD_GC", "0")
+        .define("WAMR_BUILD_STRINGREF", "0")
+        .define("WAMR_BUILD_EXCE_HANDLING", "0")
         .define("WAMR_BUILD_TARGET", target_arch);
 
     if target_os == "windows" {
@@ -363,6 +388,17 @@ fn build_mvvm() {
         dst.define("CMAKE_LINKER_TYPE", "MSVC");
         dst.define("WAMR_BUILD_PLATFORM", "windows");
     }
+
+    // Add MVVM's include directory and AOT runtime directory to C flags
+    // MVVM's WAMR fork has hardcoded relative includes to these paths
+    let mvvm_include = mvvm_dir.join("include");
+    let aot_runtime_dir = mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/aot");
+    let extra_includes = format!(
+        "-I{} -I{}",
+        mvvm_include.display(),
+        aot_runtime_dir.display()
+    );
+    dst.cflag(&extra_includes);
 
     let dst = dst.build();
 
@@ -392,15 +428,9 @@ fn build_mvvm() {
     }
 
     // Generate bindings for MVVM checkpoint API
-    let mvvm_header = mvvm_dir.join("include/mvvm_checkpoint.h");
-    let wasm_c_api_header = mvvm_dir.join("wamr/core/iwasm/include/wasm_c_api.h");
-
-    // Use wasm_c_api.h if mvvm-specific header doesn't exist
-    let header_to_use = if mvvm_header.exists() {
-        mvvm_header
-    } else {
-        wasm_c_api_header
-    };
+    // MVVM has wasm-micro-runtime as a submodule at lib/wasm-micro-runtime
+    let wasm_c_api_header = mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/include/wasm_c_api.h");
+    let header_to_use = wasm_c_api_header;
 
     let bindings = bindgen::Builder::default()
         .header(header_to_use.to_str().unwrap())
