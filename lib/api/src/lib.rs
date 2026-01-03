@@ -493,6 +493,46 @@ pub use wat::parse_bytes as wat2wasm;
 
 pub use wasmer_derive::ValueType;
 
+/// MVVM (Multi-V-VM) live migration types and traits.
+///
+/// This module provides checkpoint/restore capabilities for WebAssembly instances,
+/// enabling live migration across different machines and even different CPU architectures.
+///
+/// # Example
+///
+/// ```ignore
+/// use wasmer::{Store, Module, Instance};
+/// use wasmer::mvvm::{MvvmCheckpointData, TargetArchitecture};
+///
+/// // Create a checkpoint
+/// let checkpoint = instance.checkpoint(&store)?;
+///
+/// // Serialize and transfer to another machine
+/// let bytes = checkpoint.compress()?;
+/// // ... transfer bytes ...
+///
+/// // On target machine: restore
+/// let restored = MvvmCheckpointData::decompress(&bytes)?;
+/// instance.restore_from_checkpoint(&restored)?;
+/// ```
+#[cfg(feature = "mvvm")]
+pub mod mvvm {
+    //! MVVM (Multi-V-VM) checkpoint/restore types for live migration.
+    //!
+    //! See the [module-level documentation](crate::mvvm) for more information.
+    pub use crate::wamr::migration::{
+        CheckpointGranularity, CrossArchMigratable, InstructionPointer, MigrationError,
+        MvvmCheckpointData, MvvmCheckpointable, TargetArchitecture,
+    };
+
+    // Re-export submodules for advanced usage
+    pub use crate::wamr::migration::{memory, stack};
+}
+
+// Convenience re-exports of the most commonly used MVVM types at crate root
+#[cfg(feature = "mvvm")]
+pub use mvvm::{MigrationError, MvvmCheckpointData, MvvmCheckpointable, TargetArchitecture};
+
 #[cfg(any(
     all(
         feature = "sys-default",

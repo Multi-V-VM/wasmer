@@ -632,6 +632,24 @@ fn build_mvvm() {
     );
     // Link as wamr for compatibility with the WAMR Rust bindings module
     println!("cargo:rustc-link-lib=static=wamr");
+
+    // Compile MVVM stub implementations
+    // These provide placeholder implementations for functions that MVVM's WAMR fork
+    // expects from the main MVVM library. Replace with full MVVM library later.
+    let stubs_path = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("src/backend/wamr/mvvm_stubs.c");
+
+    if stubs_path.exists() {
+        cc::Build::new()
+            .file(&stubs_path)
+            .include(mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/include"))
+            .include(mvvm_dir.join("lib/wasm-micro-runtime/core/shared/platform/include"))
+            .include(mvvm_dir.join("lib/wasm-micro-runtime/core/shared/platform/linux"))
+            .warnings(false)
+            .compile("mvvm_stubs");
+
+        println!("cargo:rustc-link-lib=static=mvvm_stubs");
+    }
 }
 
 #[cfg(feature = "v8")]

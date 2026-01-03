@@ -6722,6 +6722,7 @@ dependencies = [
  "bincode 2.0.1",
  "bindgen",
  "bytes",
+ "cc",
  "cfg-if",
  "cmake",
  "corosensei",

@@ -168,6 +168,123 @@ impl Instance {
     pub fn module(&self) -> &Module {
         &self.module
     }
+
+    /// Creates a checkpoint of the current instance state for live migration.
+    ///
+    /// This captures the complete execution state including:
+    /// - Linear memory
+    /// - Global variables
+    /// - Call stack (interpreter frames)
+    /// - Operand stack
+    /// - Table state
+    ///
+    /// # Requirements
+    ///
+    /// - The `mvvm` feature must be enabled
+    /// - The instance must be running on the WAMR backend
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The MVVM feature is not enabled
+    /// - The backend is not WAMR
+    /// - The current execution position is not checkpoint-safe
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use wasmer::{Instance, Store, Module};
+    ///
+    /// let checkpoint = instance.checkpoint(&store)?;
+    /// let serialized = checkpoint.serialize()?;
+    /// // Transfer serialized data to target machine...
+    /// ```
+    #[cfg(feature = "mvvm")]
+    pub fn checkpoint(
+        &self,
+        store: &impl crate::AsStoreRef,
+    ) -> Result<crate::wamr::migration::MvvmCheckpointData, crate::wamr::migration::MigrationError>
+    {
+        match &self._inner {
+            #[cfg(feature = "wamr")]
+            crate::BackendInstance::Wamr(instance) => instance.checkpoint(store),
+            _ => Err(crate::wamr::migration::MigrationError::MvvmNotEnabled),
+        }
+    }
+
+    /// Restores instance state from a checkpoint.
+    ///
+    /// This restores the complete execution state from a previously created checkpoint,
+    /// allowing the instance to continue execution from where it left off.
+    ///
+    /// # Requirements
+    ///
+    /// - The `mvvm` feature must be enabled
+    /// - The instance must be running on the WAMR backend
+    /// - The checkpoint must have been created from a compatible module
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The MVVM feature is not enabled
+    /// - The backend is not WAMR
+    /// - The checkpoint is incompatible or corrupted
+    /// - The module hash doesn't match
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use wasmer::{Instance, Store, Module};
+    /// use wasmer::wamr::migration::MvvmCheckpointData;
+    ///
+    /// let checkpoint = MvvmCheckpointData::deserialize(&checkpoint_bytes)?;
+    /// instance.restore_from_checkpoint(&checkpoint)?;
+    /// // Continue execution...
+    /// ```
+    #[cfg(feature = "mvvm")]
+    pub fn restore_from_checkpoint(
+        &mut self,
+        checkpoint: &crate::wamr::migration::MvvmCheckpointData,
+    ) -> Result<(), crate::wamr::migration::MigrationError> {
+        match &mut self._inner {
+            #[cfg(feature = "wamr")]
+            crate::BackendInstance::Wamr(instance) => instance.restore_from_checkpoint(checkpoint),
+            _ => Err(crate::wamr::migration::MigrationError::MvvmNotEnabled),
+        }
+    }
+
+    /// Returns true if a checkpoint can be taken at the current execution position.
+    ///
+    /// Checkpoints can only be taken at safe points during execution, typically
+    /// at function boundaries or between instructions when no host calls are active.
+    ///
+    /// # Requirements
+    ///
+    /// - The `mvvm` feature must be enabled
+    /// - The instance must be running on the WAMR backend
+    ///
+    /// # Returns
+    ///
+    /// - `true` if a checkpoint can be safely taken
+    /// - `false` if the backend is not WAMR or if the current position is not checkpoint-safe
+    #[cfg(feature = "mvvm")]
+    pub fn is_checkpoint_safe(&self) -> bool {
+        match &self._inner {
+            #[cfg(feature = "wamr")]
+            crate::BackendInstance::Wamr(instance) => instance.is_checkpoint_safe(),
+            _ => false,
+        }
+    }
+
+    /// Returns whether this instance supports MVVM checkpoint/restore.
+    ///
+    /// This is true only when:
+    /// - The `mvvm` feature is enabled
+    /// - The instance is running on the WAMR backend
+    #[cfg(feature = "mvvm")]
+    pub fn supports_checkpoint(&self) -> bool {
+        matches!(&self._inner, crate::BackendInstance::Wamr(_))
+    }
 }
 
 impl std::fmt::Debug for Instance {
