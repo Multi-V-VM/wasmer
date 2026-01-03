@@ -212,8 +212,9 @@ impl Instance {
     pub fn checkpoint(&self, store: &impl AsStoreRef) -> Result<MvvmCheckpointData, MigrationError> {
         use crate::backend::wamr::mvvm_bindings::*;
 
-        // Get the raw instance pointer
-        let instance_ptr = self.handle.0;
+        // Get the raw instance pointer - cast to MVVM bindings type
+        // Both wasm_instance_t types are structurally identical
+        let instance_ptr = self.handle.0 as *mut wasm_instance_t;
 
         // Create checkpoint context
         let ctx = unsafe { mvvm_checkpoint_context_new(instance_ptr) };
@@ -297,7 +298,8 @@ impl Instance {
     ) -> Result<(), MigrationError> {
         use crate::backend::wamr::mvvm_bindings::*;
 
-        let instance_ptr = self.handle.0;
+        // Cast to MVVM bindings type (structurally identical)
+        let instance_ptr = self.handle.0 as *mut wasm_instance_t;
 
         // Create checkpoint context
         let ctx = unsafe { mvvm_checkpoint_context_new(instance_ptr) };
@@ -333,7 +335,8 @@ impl Instance {
     pub fn is_checkpoint_safe(&self) -> bool {
         use crate::backend::wamr::mvvm_bindings::*;
 
-        let instance_ptr = self.handle.0;
+        // Cast to MVVM bindings type (structurally identical)
+        let instance_ptr = self.handle.0 as *mut wasm_instance_t;
         let ctx = unsafe { mvvm_checkpoint_context_new(instance_ptr) };
         if ctx.is_null() {
             return false;

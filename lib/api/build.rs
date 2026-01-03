@@ -270,6 +270,127 @@ fn build_wamr() {
 }
 
 #[cfg(feature = "mvvm")]
+fn patch_mvvm_includes(mvvm_dir: &std::path::Path) {
+    // MVVM's WAMR fork uses hardcoded relative includes like
+    // "../../../../../../../include/wamr_export.h" which only work when
+    // building from MVVM's root directory.
+    //
+    // Fix this by:
+    // 1. Copying the MVVM include files to multiple WAMR directories
+    // 2. Patching source files to remove the relative paths
+
+    let mvvm_include_dir = mvvm_dir.join("include");
+
+    // Directories where headers need to be accessible
+    let target_dirs = [
+        mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/include"),
+        mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/interpreter"),
+        mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/aot"),
+        mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/common"),
+        mvvm_dir.join("lib/wasm-micro-runtime/core/shared/platform/include"),
+    ];
+
+    // Copy MVVM headers to WAMR directories
+    let headers_to_copy = ["wamr_export.h", "mvvm_export.h"];
+
+    for header in headers_to_copy {
+        let src = mvvm_include_dir.join(header);
+        if src.exists() {
+            for target_dir in &target_dirs {
+                let dst = target_dir.join(header);
+                if !dst.exists() {
+                    if let Err(e) = std::fs::copy(&src, &dst) {
+                        println!("cargo:warning=Failed to copy {} to {}: {}", header, target_dir.display(), e);
+                    }
+                }
+            }
+        }
+    }
+
+    // Patch source files to replace relative includes with simple includes
+    // Search for all .c and .h files that might have the problematic include
+    patch_relative_includes_recursive(mvvm_dir, "lib/wasm-micro-runtime");
+
+    // Fix the static/non-static declaration mismatch (must be called once, not recursively)
+    fix_wasm_interp_header(mvvm_dir);
+}
+
+#[cfg(feature = "mvvm")]
+fn patch_relative_includes_recursive(base_dir: &std::path::Path, subdir: &str) {
+    let dir = base_dir.join(subdir);
+    if !dir.exists() {
+        return;
+    }
+
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            // Recurse into subdirectories
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let new_subdir = format!("{}/{}", subdir, name);
+                patch_relative_includes_recursive(base_dir, &new_subdir);
+            }
+        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if ext == "c" || ext == "h" {
+                // Check and patch this file
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let mut patched = content.clone();
+
+                    // Replace various relative path patterns
+                    let patterns = [
+                        "../../../../../../../include/wamr_export.h",
+                        "../../../../../../include/wamr_export.h",
+                        "../../../../../include/wamr_export.h",
+                        "../../../../include/wamr_export.h",
+                        "../../../include/wamr_export.h",
+                    ];
+
+                    for pattern in patterns {
+                        patched = patched.replace(
+                            &format!("#include \"{}\"", pattern),
+                            "#include \"wamr_export.h\"",
+                        );
+                    }
+
+                    if patched != content {
+                        let _ = std::fs::write(&path, patched);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "mvvm")]
+fn fix_wasm_interp_header(mvvm_dir: &std::path::Path) {
+    // Fix the static/non-static mismatch in wasm_interp.h
+    // When MULTI_MODULE is enabled, wasm_interp_call_func_bytecode is static
+    // in the source but declared non-static in the header
+    let interp_header = mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/interpreter/wasm_interp.h");
+    if interp_header.exists() {
+        if let Ok(content) = std::fs::read_to_string(&interp_header) {
+            // Skip if already patched (check for our marker)
+            if content.contains("MVVM_PATCHED_STATIC_DECLARATION") {
+                return;
+            }
+            // Use #if 0 instead of C comments to avoid nested comment issues
+            let patched = content.replace(
+                "void\nwasm_interp_call_func_bytecode(struct WASMModuleInstance *module,\n                               struct WASMExecEnv *exec_env,\n                               struct WASMFunctionInstance *cur_func,\n                               struct WASMInterpFrame *prev_frame);",
+                "/* MVVM_PATCHED_STATIC_DECLARATION: disabled conflicting declaration */\n#if 0\nvoid\nwasm_interp_call_func_bytecode(struct WASMModuleInstance *module,\n                               struct WASMExecEnv *exec_env,\n                               struct WASMFunctionInstance *cur_func,\n                               struct WASMInterpFrame *prev_frame);\n#endif",
+            );
+            if patched != content {
+                let _ = std::fs::write(&interp_header, patched);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "mvvm")]
 fn build_mvvm() {
     use bindgen::callbacks::ParseCallbacks;
     use cmake::Config;
@@ -320,6 +441,11 @@ fn build_mvvm() {
         if !status.success() {
             panic!("git clone --recursive failed for MVVM repository");
         }
+
+        // Patch MVVM's WAMR fork to fix hardcoded relative includes
+        // These files use "../../../../../../../include/wamr_export.h" which doesn't work
+        // when building WAMR standalone. We replace with the proper include.
+        patch_mvvm_includes(&mvvm_dir);
     } else {
         println!("cargo::rerun-if-changed={}", mvvm_dir.display());
     }
@@ -333,7 +459,7 @@ fn build_mvvm() {
 
     dst.always_configure(true)
         .generator("Ninja")
-        .no_build_target(true)
+        .build_target("vmlib")  // Only build vmlib, not the iwasm executable
         .define(
             "CMAKE_BUILD_TYPE",
             if cfg!(debug_assertions) {
@@ -348,9 +474,9 @@ fn build_mvvm() {
         .define("WAMR_BUILD_CHECKPOINT_RESTORE", "1")
         .define("WAMR_BUILD_DUMP_CALL_STACK", "1")
         .define("WAMR_BUILD_CUSTOM_NAME_SECTION", "1")
-        // Enable AOT only (required for MVVM checkpoint)
+        // Enable both AOT and interpreter (MVVM checkpoint needs both)
         .define("WAMR_BUILD_AOT", "1")
-        .define("WAMR_BUILD_INTERP", "0") // Disable interpreter, AOT only
+        .define("WAMR_BUILD_INTERP", "1")
         .define("WAMR_BUILD_JIT", "0")
         .define("WAMR_BUILD_FAST_JIT", "0")
         // Standard WAMR features
@@ -389,21 +515,25 @@ fn build_mvvm() {
         dst.define("WAMR_BUILD_PLATFORM", "windows");
     }
 
-    // Add MVVM's include directory and AOT runtime directory to C flags
+    // Add MVVM's include directory and WAMR runtime directories to C flags
     // MVVM's WAMR fork has hardcoded relative includes to these paths
     let mvvm_include = mvvm_dir.join("include");
     let aot_runtime_dir = mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/aot");
+    let wamr_include_dir = mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/include");
+    let interp_dir = mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/interpreter");
     let extra_includes = format!(
-        "-I{} -I{}",
+        "-I{} -I{} -I{} -I{}",
         mvvm_include.display(),
-        aot_runtime_dir.display()
+        aot_runtime_dir.display(),
+        wamr_include_dir.display(),
+        interp_dir.display()
     );
     dst.cflag(&extra_includes);
 
     let dst = dst.build();
 
-    // Generate bindings for MVVM-specific headers
-    // Rename symbols to avoid conflicts with regular WAMR
+    // Generate bindings for MVVM's WAMR
+    // Use the same "wamr_" prefix as regular WAMR so the Rust bindings work
     static mut MVVM_RENAMED: Vec<(String, String)> = vec![];
 
     #[derive(Debug)]
@@ -413,9 +543,10 @@ fn build_mvvm() {
             &self,
             item_info: bindgen::callbacks::ItemInfo<'_>,
         ) -> Option<String> {
-            // Rename wasm* and mvvm* symbols
-            if item_info.name.starts_with("wasm") || item_info.name.starts_with("mvvm") {
-                let new_name = format!("mvvm_{}", item_info.name);
+            // Rename wasm* symbols to wamr_* (same prefix as regular WAMR)
+            // This allows the Rust bindings module to work with MVVM's WAMR
+            if item_info.name.starts_with("wasm") {
+                let new_name = format!("wamr_{}", item_info.name);
                 #[allow(static_mut_refs)]
                 unsafe {
                     MVVM_RENAMED.push((item_info.name.to_string(), new_name.clone()));
@@ -427,8 +558,8 @@ fn build_mvvm() {
         }
     }
 
-    // Generate bindings for MVVM checkpoint API
-    // MVVM has wasm-micro-runtime as a submodule at lib/wasm-micro-runtime
+    // Generate bindings for WAMR C API from MVVM's WAMR fork
+    // Output to wamr_bindings.rs for compatibility with the WAMR Rust module
     let wasm_c_api_header = mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/include/wasm_c_api.h");
     let header_to_use = wasm_c_api_header;
 
@@ -438,10 +569,11 @@ fn build_mvvm() {
         .derive_debug(true)
         .parse_callbacks(Box::new(MvvmRenamer {}))
         .generate()
-        .expect("Unable to generate MVVM bindings");
+        .expect("Unable to generate WAMR bindings from MVVM");
 
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let bindings_path = out_path.join("mvvm_bindings.rs");
+    // Use wamr_bindings.rs for compatibility with the WAMR Rust module
+    let bindings_path = out_path.join("wamr_bindings.rs");
     bindings
         .write_to_file(&bindings_path)
         .expect("Couldn't write MVVM bindings");
@@ -470,9 +602,10 @@ fn build_mvvm() {
                 })
                 .collect();
 
-            // Find the built library (name may vary by MVVM version)
+            // Find the built library and rename to libwamr.a for compatibility
+            // with the WAMR Rust bindings module
             let input_lib = dst.join("build").join("libvmlib.a");
-            let output_lib = dst.join("build").join("libmvvm.a");
+            let output_lib = dst.join("build").join("libwamr.a");
 
             if input_lib.exists() {
                 let output = std::process::Command::new(objcopy)
@@ -497,7 +630,8 @@ fn build_mvvm() {
         "cargo:rustc-link-search=native={}",
         dst.join("build").display()
     );
-    println!("cargo:rustc-link-lib=static=mvvm");
+    // Link as wamr for compatibility with the WAMR Rust bindings module
+    println!("cargo:rustc-link-lib=static=wamr");
 }
 
 #[cfg(feature = "v8")]
@@ -750,7 +884,9 @@ fn build_wasmi() {
 }
 #[allow(unused)]
 fn main() {
-    #[cfg(feature = "wamr")]
+    // MVVM includes its own modified WAMR fork, so don't build regular WAMR
+    // when MVVM is enabled
+    #[cfg(all(feature = "wamr", not(feature = "mvvm")))]
     build_wamr();
 
     #[cfg(feature = "mvvm")]

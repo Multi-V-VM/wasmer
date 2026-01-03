@@ -2,6 +2,9 @@
 //!
 //! This module provides the low-level C FFI bindings for MVVM, which extends
 //! WAMR with checkpoint and restore capabilities for live migration.
+//!
+//! The base WAMR types are in the `bindings` module. This module only contains
+//! MVVM-specific extensions for checkpoint/restore.
 
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
@@ -9,18 +12,9 @@
 #![allow(dead_code)]
 #![allow(clippy::all)]
 
-// Include the auto-generated bindings from build.rs
+// Re-export WAMR types from the bindings module
 #[cfg(feature = "mvvm")]
-include!(concat!(env!("OUT_DIR"), "/mvvm_bindings.rs"));
-
-// Re-export commonly used types from the generated bindings
-#[cfg(feature = "mvvm")]
-pub use self::{
-    wasm_byte_vec_t, wasm_engine_delete, wasm_engine_new, wasm_engine_t, wasm_extern_t,
-    wasm_extern_vec_t, wasm_instance_delete, wasm_instance_exports, wasm_instance_new,
-    wasm_instance_t, wasm_module_delete, wasm_module_new, wasm_module_t, wasm_store_delete,
-    wasm_store_new, wasm_store_t,
-};
+pub use super::bindings::wasm_instance_t;
 
 /// Opaque type for MVVM checkpoint context.
 /// This is used to manage the checkpoint/restore state.
@@ -90,7 +84,7 @@ pub enum mvvm_result_t {
 // Extern "C" declarations for MVVM-specific functions.
 // These are the additional functions provided by MVVM on top of WAMR.
 #[cfg(feature = "mvvm")]
-extern "C" {
+unsafe extern "C" {
     /// Create a new checkpoint context for the given instance.
     pub fn mvvm_checkpoint_context_new(
         instance: *mut wasm_instance_t,

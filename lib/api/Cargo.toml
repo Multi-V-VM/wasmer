@@ -41,8 +41,8 @@ wat = { workspace = true, optional = true }
 rustc-demangle.workspace = true
 shared-buffer.workspace = true
 # - MVVM migration dependencies
-serde = { workspace = true, optional = true, features = ["derive"] }
-bincode = { workspace = true, optional = true }
+serde = { workspace = true, optional = true, features = ["derive", "std"] }
+bincode = { workspace = true, optional = true, features = ["serde"] }
 lz4_flex = { workspace = true, optional = true }
 
 wasmi_c_api_impl = { workspace = true, optional = true, features = [

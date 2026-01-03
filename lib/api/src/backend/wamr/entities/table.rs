@@ -85,11 +85,22 @@ impl Table {
             }
 
             let kind = match self.ty(store).ty {
+                // MVVM uses ANYREF instead of EXTERNREF
+                #[cfg(feature = "mvvm")]
+                wasmer_types::Type::ExternRef => wasm_valkind_enum_WASM_ANYREF,
+                #[cfg(not(feature = "mvvm"))]
                 wasmer_types::Type::ExternRef => wasm_valkind_enum_WASM_EXTERNREF,
                 wasmer_types::Type::FuncRef => wasm_valkind_enum_WASM_FUNCREF,
                 ty => panic!("unsupported table type: {ty:?}"),
             } as u8;
 
+            // MVVM's WAMR fork has simpler wasm_val_t without _paddings
+            #[cfg(feature = "mvvm")]
+            let value = wasm_val_t {
+                kind,
+                of: bindings::wasm_val_t__bindgen_ty_1 { ref_ },
+            };
+            #[cfg(not(feature = "mvvm"))]
             let value = wasm_val_t {
                 kind,
                 _paddings: Default::default(),

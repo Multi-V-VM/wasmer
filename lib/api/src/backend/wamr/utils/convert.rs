@@ -19,26 +19,59 @@ pub trait IntoCApiValue {
 impl IntoCApiValue for Value {
     fn into_cv(self) -> wasm_val_t {
         match self {
+            // MVVM's WAMR fork has a simpler wasm_val_t without _paddings field
+            #[cfg(feature = "mvvm")]
+            Self::I32(val) => wasm_val_t {
+                kind: bindings::wasm_valkind_enum_WASM_I32 as _,
+                of: wasm_val_t__bindgen_ty_1 { i32_: val },
+            },
+            #[cfg(not(feature = "mvvm"))]
             Self::I32(val) => wasm_val_t {
                 kind: bindings::wasm_valkind_enum_WASM_I32 as _,
                 _paddings: Default::default(),
                 of: wasm_val_t__bindgen_ty_1 { i32_: val },
             },
+            #[cfg(feature = "mvvm")]
+            Self::I64(val) => wasm_val_t {
+                kind: bindings::wasm_valkind_enum_WASM_I64 as _,
+                of: wasm_val_t__bindgen_ty_1 { i64_: val },
+            },
+            #[cfg(not(feature = "mvvm"))]
             Self::I64(val) => wasm_val_t {
                 kind: bindings::wasm_valkind_enum_WASM_I64 as _,
                 _paddings: Default::default(),
                 of: wasm_val_t__bindgen_ty_1 { i64_: val },
             },
+            #[cfg(feature = "mvvm")]
+            Self::F32(val) => wasm_val_t {
+                kind: bindings::wasm_valkind_enum_WASM_F32 as _,
+                of: wasm_val_t__bindgen_ty_1 { f32_: val },
+            },
+            #[cfg(not(feature = "mvvm"))]
             Self::F32(val) => wasm_val_t {
                 kind: bindings::wasm_valkind_enum_WASM_F32 as _,
                 _paddings: Default::default(),
                 of: wasm_val_t__bindgen_ty_1 { f32_: val },
             },
+            #[cfg(feature = "mvvm")]
+            Self::F64(val) => wasm_val_t {
+                kind: bindings::wasm_valkind_enum_WASM_F64 as _,
+                of: wasm_val_t__bindgen_ty_1 { f64_: val },
+            },
+            #[cfg(not(feature = "mvvm"))]
             Self::F64(val) => wasm_val_t {
                 kind: bindings::wasm_valkind_enum_WASM_F64 as _,
                 _paddings: Default::default(),
                 of: wasm_val_t__bindgen_ty_1 { f64_: val },
             },
+            #[cfg(feature = "mvvm")]
+            Self::FuncRef(Some(val)) => wasm_val_t {
+                kind: bindings::wasm_valkind_enum_WASM_FUNCREF as _,
+                of: wasm_val_t__bindgen_ty_1 {
+                    ref_: unsafe { wasm_func_as_ref(val.as_wamr().handle) },
+                },
+            },
+            #[cfg(not(feature = "mvvm"))]
             Self::FuncRef(Some(val)) => wasm_val_t {
                 kind: bindings::wasm_valkind_enum_WASM_FUNCREF as _,
                 _paddings: Default::default(),
@@ -46,6 +79,14 @@ impl IntoCApiValue for Value {
                     ref_: unsafe { wasm_func_as_ref(val.as_wamr().handle) },
                 },
             },
+            #[cfg(feature = "mvvm")]
+            Self::FuncRef(None) => wasm_val_t {
+                kind: bindings::wasm_valkind_enum_WASM_FUNCREF as _,
+                of: wasm_val_t__bindgen_ty_1 {
+                    ref_: unsafe { wasm_func_as_ref(std::ptr::null_mut()) },
+                },
+            },
+            #[cfg(not(feature = "mvvm"))]
             Self::FuncRef(None) => wasm_val_t {
                 kind: bindings::wasm_valkind_enum_WASM_FUNCREF as _,
                 _paddings: Default::default(),
@@ -83,6 +124,12 @@ impl IntoWasmerValue for wasm_val_t {
                     handle: unsafe { self.of.ref_ as _ },
                 }),
             ))),
+            // MVVM uses ANYREF instead of EXTERNREF
+            #[cfg(feature = "mvvm")]
+            bindings::wasm_valkind_enum_WASM_ANYREF => {
+                panic!("ExternRefs are not currently supported through wasm_c_api")
+            }
+            #[cfg(not(feature = "mvvm"))]
             bindings::wasm_valkind_enum_WASM_EXTERNREF => {
                 panic!("ExternRefs are not currently supported through wasm_c_api")
             }
@@ -103,7 +150,13 @@ impl IntoWasmerType for wasm_valkind_t {
             bindings::wasm_valkind_enum_WASM_I64 => Type::I64,
             bindings::wasm_valkind_enum_WASM_F32 => Type::F32,
             bindings::wasm_valkind_enum_WASM_F64 => Type::F64,
+            // MVVM doesn't have V128 support
+            #[cfg(not(feature = "mvvm"))]
             bindings::wasm_valkind_enum_WASM_V128 => Type::V128,
+            // MVVM uses ANYREF instead of EXTERNREF
+            #[cfg(feature = "mvvm")]
+            bindings::wasm_valkind_enum_WASM_ANYREF => Type::ExternRef,
+            #[cfg(not(feature = "mvvm"))]
             bindings::wasm_valkind_enum_WASM_EXTERNREF => Type::ExternRef,
             bindings::wasm_valkind_enum_WASM_FUNCREF => Type::FuncRef,
             _ => unreachable!("wamr kind {self:?} has no matching wasmer_types::Type"),
@@ -118,15 +171,23 @@ pub trait IntoCApiType {
 
 impl IntoCApiType for Type {
     fn into_ct(self) -> wasm_valkind_t {
-        match self as _ {
+        match self {
             Self::I32 => bindings::wasm_valkind_enum_WASM_I32 as _,
             Self::I64 => bindings::wasm_valkind_enum_WASM_I64 as _,
             Self::F32 => bindings::wasm_valkind_enum_WASM_F32 as _,
             Self::F64 => bindings::wasm_valkind_enum_WASM_F64 as _,
             Self::FuncRef => bindings::wasm_valkind_enum_WASM_FUNCREF as _,
+            // MVVM uses ANYREF instead of EXTERNREF
+            #[cfg(feature = "mvvm")]
+            Self::ExternRef => bindings::wasm_valkind_enum_WASM_ANYREF as _,
+            #[cfg(not(feature = "mvvm"))]
             Self::ExternRef => bindings::wasm_valkind_enum_WASM_EXTERNREF as _,
+            // MVVM doesn't have V128 support
+            #[cfg(feature = "mvvm")]
+            Self::V128 => panic!("MVVM does not support V128/SIMD"),
+            #[cfg(not(feature = "mvvm"))]
             Self::V128 => bindings::wasm_valkind_enum_WASM_V128 as _,
-            Self::ExceptionRef => panic!("v8 currently does not support exnrefs"),
+            Self::ExceptionRef => panic!("wamr currently does not support exnrefs"),
         }
     }
 }

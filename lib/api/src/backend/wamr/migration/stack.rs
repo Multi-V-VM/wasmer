@@ -30,25 +30,39 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum WasmValueType {
+    /// 32-bit integer
     I32 = 0,
+    /// 64-bit integer
     I64 = 1,
+    /// 32-bit float
     F32 = 2,
+    /// 64-bit float
     F64 = 3,
+    /// 128-bit SIMD vector
     V128 = 4,
+    /// Function reference
     FuncRef = 5,
+    /// External reference
     ExternRef = 6,
 }
 
 /// A serialized WebAssembly value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SerializedValue {
+    /// 32-bit integer value
     I32(i32),
+    /// 64-bit integer value
     I64(i64),
-    F32(u32), // Stored as bits to preserve NaN payloads
-    F64(u64), // Stored as bits to preserve NaN payloads
+    /// 32-bit float stored as bits to preserve NaN payloads
+    F32(u32),
+    /// 64-bit float stored as bits to preserve NaN payloads
+    F64(u64),
+    /// 128-bit SIMD vector
     V128([u8; 16]),
-    FuncRef(Option<u32>), // Function index or null
-    ExternRef(Option<u32>), // Extern ref index or null
+    /// Function reference (function index or null)
+    FuncRef(Option<u32>),
+    /// External reference (extern ref index or null)
+    ExternRef(Option<u32>),
 }
 
 impl SerializedValue {

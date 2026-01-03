@@ -266,16 +266,20 @@ pub enum MigrationError {
     RestoreFailed(String),
 
     /// Source and target architectures are incompatible
-    #[error("Incompatible architecture: source={source}, target={target}")]
+    #[error("Incompatible architecture: from={from_arch}, to={to_arch}")]
     IncompatibleArchitecture {
-        source: TargetArchitecture,
-        target: TargetArchitecture,
+        /// Source architecture
+        from_arch: TargetArchitecture,
+        /// Target architecture
+        to_arch: TargetArchitecture,
     },
 
     /// Module hash doesn't match the checkpoint
     #[error("Module hash mismatch: expected {expected:?}, got {actual:?}")]
     ModuleHashMismatch {
+        /// Expected module hash
         expected: [u8; 32],
+        /// Actual module hash
         actual: [u8; 32],
     },
 
@@ -338,8 +342,8 @@ pub trait CrossArchMigratable: MvvmCheckpointable {
         // WebAssembly's abstract machine model makes cross-arch migration straightforward
         if !checkpoint.source_arch.can_migrate_to(target) {
             return Err(MigrationError::IncompatibleArchitecture {
-                source: checkpoint.source_arch,
-                target,
+                from_arch: checkpoint.source_arch,
+                to_arch: target,
             });
         }
         Ok(checkpoint)
