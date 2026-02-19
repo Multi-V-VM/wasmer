@@ -19,6 +19,7 @@ fn build_wamr() {
         "freebsd" => "freebsd",
         "android" => "android",
         "ios" => "ios",
+        "ios-sim" => "ios",
         other => panic!("Unsupported CARGO_CFG_TARGET_OS: {other}"),
     };
 
@@ -105,7 +106,7 @@ fn build_wamr() {
         dst.define("WAMR_BUILD_LIBC_UVWASI", "0");
     }
 
-    if target_os == "ios" {
+    if target_os == "ios" || target_os == "ios-sim" {
         // XXX: Hacky
         //
         // Compiling wamr targeting `aarch64-apple-ios` results in
@@ -173,7 +174,7 @@ fn build_wamr() {
         .parse_callbacks(Box::new(WamrRenamer {}));
 
     // Add iOS SDK include paths for bindgen
-    if target_os == "ios" {
+    if target_os == "ios" || target_os == "ios-sim" {
         let sdk_path = env::var("SDKROOT")
             .unwrap_or_else(|_| "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk".to_string());
         builder = builder
@@ -262,7 +263,7 @@ fn build_wamr() {
         "cargo:rustc-link-search=native={}",
         dst.join("build").display()
     );
-    if target_os == "ios" {
+    if target_os == "ios" || target_os == "ios-sim" {
         println!("cargo:rustc-link-lib=dylib=wamr");
     } else {
         println!("cargo:rustc-link-lib=static=wamr");
@@ -392,7 +393,6 @@ fn fix_wasm_interp_header(mvvm_dir: &std::path::Path) {
 
 #[cfg(feature = "mvvm")]
 fn build_mvvm() {
-    use bindgen::callbacks::ParseCallbacks;
     use cmake::Config;
     use std::{env, path::PathBuf, process::Command};
 
@@ -408,6 +408,8 @@ fn build_mvvm() {
         "macos" => "darwin",
         "freebsd" => "freebsd",
         "android" => "android",
+        "ios" => "ios",
+        "ios-sim" => "ios",
         other => panic!("MVVM unsupported CARGO_CFG_TARGET_OS: {other}"),
     };
 
@@ -450,6 +452,9 @@ fn build_mvvm() {
         println!("cargo::rerun-if-changed={}", mvvm_dir.display());
     }
 
+    // Always apply patches (they're idempotent) — needed even if mvvm_dir already existed
+    patch_mvvm_includes(&mvvm_dir);
+
     // Build MVVM's WAMR fork directly (bypasses main MVVM CMakeLists which enables too many features)
     // The WAMR fork at lib/wasm-micro-runtime has checkpoint/restore support
     let wamr_platform_dir = mvvm_dir
@@ -457,9 +462,12 @@ fn build_mvvm() {
         .join(target_os);
     let mut dst = Config::new(wamr_platform_dir.as_path());
 
+    // We patch the iOS CMakeLists.txt to rename the 'iwasm' SHARED library
+    // to a 'vmlib' STATIC library, so all platforms use the same target name.
+    dst.build_target("vmlib");
+
     dst.always_configure(true)
         .generator("Ninja")
-        .build_target("vmlib")  // Only build vmlib, not the iwasm executable
         .define(
             "CMAKE_BUILD_TYPE",
             if cfg!(debug_assertions) {
@@ -515,12 +523,60 @@ fn build_mvvm() {
         dst.define("WAMR_BUILD_PLATFORM", "windows");
     }
 
+    if target_os == "ios" || target_os == "ios-sim" {
+        // Remove -mfloat-abi=hard which is unsupported on aarch64-apple-ios
+        // See: https://github.com/bytecodealliance/wasm-micro-runtime/pull/3889
+        let mut lines = vec![];
+        let cmake_file_path = wamr_platform_dir.join("CMakeLists.txt");
+        for line in std::fs::read_to_string(&cmake_file_path).unwrap().lines() {
+            if line.contains("-mfloat-abi=hard") {
+                continue;
+            }
+            // The iOS CMakeLists builds a SHARED library named 'iwasm', but we
+            // need a STATIC library named 'vmlib' to match what darwin/linux
+            // produce (and what the rest of build_mvvm expects).
+            if line.contains("add_library") && line.contains("iwasm") && line.contains("SHARED") {
+                lines.push(line.replace("iwasm", "vmlib").replace("SHARED", "STATIC"));
+            } else if line.contains("iwasm") && !line.contains("include") {
+                // Replace other references to the iwasm target with vmlib,
+                // but preserve include-copy commands that reference iwasm paths.
+                lines.push(line.replace("iwasm", "vmlib"));
+            } else {
+                lines.push(line.to_string());
+            }
+        }
+        std::fs::write(cmake_file_path, lines.join("\n")).unwrap();
+
+        // pthread_jit_write_protect_np is not available on iOS.
+        // Replace the call with a no-op on iOS builds.
+        let posix_thread_path = mvvm_dir.join(
+            "lib/wasm-micro-runtime/core/shared/platform/common/posix/posix_thread.c",
+        );
+        if posix_thread_path.exists() {
+            let content = std::fs::read_to_string(&posix_thread_path).unwrap();
+            let patched = content.replace(
+                "#if (defined(__APPLE__) || defined(__MACH__)) && defined(__arm64__)\n    pthread_jit_write_protect_np(enabled);",
+                "#if (defined(__APPLE__) || defined(__MACH__)) && defined(__arm64__) && !defined(WAMR_BUILD_TARGET_IOS)\n    pthread_jit_write_protect_np(enabled);",
+            );
+            if patched != content {
+                std::fs::write(&posix_thread_path, patched).unwrap();
+            }
+        }
+
+        // Define WAMR_BUILD_TARGET_IOS so the patched guard above takes effect
+        dst.cflag("-DWAMR_BUILD_TARGET_IOS=1");
+    }
+
     // Add MVVM's include directory and WAMR runtime directories to C flags
     // MVVM's WAMR fork has hardcoded relative includes to these paths
     let mvvm_include = mvvm_dir.join("include");
     let aot_runtime_dir = mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/aot");
     let wamr_include_dir = mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/include");
     let interp_dir = mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/interpreter");
+
+    let stubs_path = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("src/backend/wamr/mvvm_stubs.c");
+
     let extra_includes = format!(
         "-I{} -I{} -I{} -I{}",
         mvvm_include.display(),
@@ -532,42 +588,79 @@ fn build_mvvm() {
 
     let dst = dst.build();
 
-    // Generate bindings for MVVM's WAMR
-    // Use the same "wamr_" prefix as regular WAMR so the Rust bindings work
-    static mut MVVM_RENAMED: Vec<(String, String)> = vec![];
+    // Compile mvvm_stubs.c and merge it into libvmlib.a so all MVVM symbols
+    // are resolved within a single archive. This avoids cross-library symbol
+    // resolution issues (especially when cmake creates shared libraries).
+    if stubs_path.exists() {
+        cc::Build::new()
+            .file(&stubs_path)
+            .warnings(false)
+            .compile("mvvm_stubs");
 
-    #[derive(Debug)]
-    struct MvvmRenamer {}
-    impl ParseCallbacks for MvvmRenamer {
-        fn generated_link_name_override(
-            &self,
-            item_info: bindgen::callbacks::ItemInfo<'_>,
-        ) -> Option<String> {
-            // Rename wasm* symbols to wamr_* (same prefix as regular WAMR)
-            // This allows the Rust bindings module to work with MVVM's WAMR
-            if item_info.name.starts_with("wasm") {
-                let new_name = format!("wamr_{}", item_info.name);
-                #[allow(static_mut_refs)]
-                unsafe {
-                    MVVM_RENAMED.push((item_info.name.to_string(), new_name.clone()));
-                }
-                Some(new_name)
+        let vmlib_path = dst.join("build").join("libvmlib.a");
+        let stubs_lib_path = PathBuf::from(env::var("OUT_DIR").unwrap()).join("libmvvm_stubs.a");
+        if vmlib_path.exists() && stubs_lib_path.exists() {
+            // Merge stubs into vmlib using libtool (macOS/iOS) or ar (Linux)
+            let merged_path = dst.join("build").join("libvmlib_merged.a");
+            let merge_ok = if cfg!(any(target_os = "macos", target_os = "ios")) {
+                Command::new("libtool")
+                    .args(["-static", "-o"])
+                    .arg(&merged_path)
+                    .arg(&vmlib_path)
+                    .arg(&stubs_lib_path)
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
             } else {
-                None
+                // On Linux, create a thin MRI script to merge archives
+                let mri_script = format!(
+                    "CREATE {}\nADDLIB {}\nADDLIB {}\nSAVE\nEND\n",
+                    merged_path.display(),
+                    vmlib_path.display(),
+                    stubs_lib_path.display()
+                );
+                let mri_path = dst.join("build").join("merge.mri");
+                std::fs::write(&mri_path, &mri_script).unwrap();
+                Command::new("ar")
+                    .arg("-M")
+                    .stdin(std::fs::File::open(&mri_path).unwrap())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+            };
+            if merge_ok {
+                std::fs::rename(&merged_path, &vmlib_path).unwrap();
+            } else {
+                panic!("Failed to merge mvvm_stubs into vmlib archive");
             }
         }
     }
 
+    // Generate bindings for MVVM's WAMR
+    // MVVM replaces the regular WAMR backend, so we don't need symbol renaming.
+    // The Rust code uses wasm_* function names directly, which match the library symbols.
+    // This avoids requiring objcopy for symbol renaming (which may not be available
+    // on all systems, especially for cross-compilation targets like iOS).
+
     // Generate bindings for WAMR C API from MVVM's WAMR fork
     // Output to wamr_bindings.rs for compatibility with the WAMR Rust module
     let wasm_c_api_header = mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/include/wasm_c_api.h");
-    let header_to_use = wasm_c_api_header;
 
-    let bindings = bindgen::Builder::default()
-        .header(header_to_use.to_str().unwrap())
+    let mut builder = bindgen::Builder::default()
+        .header(wasm_c_api_header.to_str().unwrap())
         .derive_default(true)
-        .derive_debug(true)
-        .parse_callbacks(Box::new(MvvmRenamer {}))
+        .derive_debug(true);
+
+    // Add iOS SDK include paths for bindgen
+    if target_os == "ios" || target_os == "ios-sim" {
+        let sdk_path = env::var("SDKROOT")
+            .unwrap_or_else(|_| "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk".to_string());
+        builder = builder
+            .clang_arg(format!("-isysroot{}", sdk_path))
+            .clang_arg(format!("--target={}", env::var("TARGET").unwrap()));
+    }
+
+    let bindings = builder
         .generate()
         .expect("Unable to generate WAMR bindings from MVVM");
 
@@ -578,78 +671,14 @@ fn build_mvvm() {
         .write_to_file(&bindings_path)
         .expect("Couldn't write MVVM bindings");
 
-    // Rename symbols in the library using objcopy
-    let objcopy_names = ["llvm-objcopy", "objcopy", "gobjcopy"];
-    let mut objcopy = None;
-    for n in objcopy_names {
-        if which::which(n).is_ok() {
-            objcopy = Some(n);
-            break;
-        }
-    }
-
-    if let Some(objcopy) = objcopy {
-        #[allow(static_mut_refs)]
-        unsafe {
-            let syms: Vec<String> = MVVM_RENAMED
-                .iter()
-                .map(|(old, new)| {
-                    if cfg!(any(target_os = "macos", target_os = "ios")) {
-                        format!("--redefine-sym=_{old}={new}")
-                    } else {
-                        format!("--redefine-sym={old}={new}")
-                    }
-                })
-                .collect();
-
-            // Find the built library and rename to libwamr.a for compatibility
-            // with the WAMR Rust bindings module
-            let input_lib = dst.join("build").join("libvmlib.a");
-            let output_lib = dst.join("build").join("libwamr.a");
-
-            if input_lib.exists() {
-                let output = std::process::Command::new(objcopy)
-                    .args(syms)
-                    .arg(input_lib.display().to_string())
-                    .arg(output_lib.display().to_string())
-                    .output()
-                    .unwrap();
-
-                if !output.status.success() {
-                    eprintln!(
-                        "{objcopy} failed with error code {}: {}",
-                        output.status,
-                        String::from_utf8(output.stderr).unwrap_or_default()
-                    );
-                }
-            }
-        }
-    }
-
+    // Link against vmlib directly (the WAMR static library built by cmake).
+    // No symbol renaming needed: MVVM replaces the regular WAMR backend,
+    // and the Rust bindings use the original wasm_* symbol names.
     println!(
         "cargo:rustc-link-search=native={}",
         dst.join("build").display()
     );
-    // Link as wamr for compatibility with the WAMR Rust bindings module
-    println!("cargo:rustc-link-lib=static=wamr");
-
-    // Compile MVVM stub implementations
-    // These provide placeholder implementations for functions that MVVM's WAMR fork
-    // expects from the main MVVM library. Replace with full MVVM library later.
-    let stubs_path = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
-        .join("src/backend/wamr/mvvm_stubs.c");
-
-    if stubs_path.exists() {
-        cc::Build::new()
-            .file(&stubs_path)
-            .include(mvvm_dir.join("lib/wasm-micro-runtime/core/iwasm/include"))
-            .include(mvvm_dir.join("lib/wasm-micro-runtime/core/shared/platform/include"))
-            .include(mvvm_dir.join("lib/wasm-micro-runtime/core/shared/platform/linux"))
-            .warnings(false)
-            .compile("mvvm_stubs");
-
-        println!("cargo:rustc-link-lib=static=mvvm_stubs");
-    }
+    println!("cargo:rustc-link-lib=static=vmlib");
 }
 
 #[cfg(feature = "v8")]
@@ -848,7 +877,7 @@ fn build_wasmi() {
             item_info: bindgen::callbacks::ItemInfo<'_>,
         ) -> Option<String> {
             if item_info.name.starts_with("wasm") {
-                let new_name = if cfg!(any(target_os = "macos", target_os = "ios")) {
+                let new_name = if cfg!(any(target_os = "macos", target_os =     "ios")) {
                     format!("_wasmi_{}", item_info.name)
                 } else {
                     format!("wasmi_{}", item_info.name)
