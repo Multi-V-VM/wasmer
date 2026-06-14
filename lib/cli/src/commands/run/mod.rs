@@ -1,6 +1,7 @@
 #![allow(missing_docs, unused)]
 
 mod capabilities;
+mod gpu;
 mod package_source;
 mod runtime;
 mod target;
@@ -624,6 +625,10 @@ impl Run {
         runtime: Arc<dyn Runtime + Send + Sync>,
     ) -> Result<(), Error> {
         let program_name = wasm_path.display().to_string();
+
+        if gpu::module_has_cuda_imports(&module) {
+            return gpu::execute_wasi_module(self, program_name, module, module_hash, runtime);
+        }
 
         let runner = self.build_wasi_runner(&runtime)?;
         runner.run_wasm(
