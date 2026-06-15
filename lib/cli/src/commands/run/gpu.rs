@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Error, bail};
+use anyhow::{bail, Context, Error};
 use wasmer::{
     ExternType, Function, FunctionEnv, FunctionEnvMut, Imports, Instance, Memory, Module,
     RuntimeError, Store, Value,
@@ -17,8 +17,9 @@ const CUDA_MEMCPY_HOST_TO_DEVICE: i32 = 1;
 const CUDA_MEMCPY_DEVICE_TO_HOST: i32 = 2;
 const CUDA_MEMCPY_DEVICE_TO_DEVICE: i32 = 3;
 const CUBLAS_OP_N: i32 = 0;
+const HETGPU_CUDA_R_32F: i32 = 0;
 
-type AppleSgemmFn = unsafe extern "C" fn(
+type LegacyAppleSgemmFn = unsafe extern "C" fn(
     *const f32,
     *const f32,
     *const f32,
@@ -31,6 +32,25 @@ type AppleSgemmFn = unsafe extern "C" fn(
     i32,
     f32,
     f32,
+) -> i32;
+
+type HetgpuGemmFn = unsafe extern "C" fn(
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    f32,
+    *const std::ffi::c_void,
+    i32,
+    i32,
+    *const std::ffi::c_void,
+    i32,
+    i32,
+    f32,
+    *mut std::ffi::c_void,
+    i32,
+    i32,
 ) -> i32;
 
 #[derive(Debug)]
@@ -310,17 +330,147 @@ fn f32s_to_bytes(values: &[f32]) -> Vec<u8> {
 }
 
 #[cfg(unix)]
-fn resolve_apple_sgemm(symbol: &[u8]) -> Option<AppleSgemmFn> {
+fn resolve_legacy_apple_sgemm(symbol: &[u8]) -> Option<LegacyAppleSgemmFn> {
     let resolved = unsafe { libc::dlsym(libc::RTLD_DEFAULT, symbol.as_ptr() as *const _) };
     if resolved.is_null() {
         return None;
     }
 
-    Some(unsafe { std::mem::transmute::<*mut libc::c_void, AppleSgemmFn>(resolved) })
+    Some(unsafe { std::mem::transmute::<*mut libc::c_void, LegacyAppleSgemmFn>(resolved) })
 }
 
 #[cfg(not(unix))]
-fn resolve_apple_sgemm(_symbol: &[u8]) -> Option<AppleSgemmFn> {
+fn resolve_legacy_apple_sgemm(_symbol: &[u8]) -> Option<LegacyAppleSgemmFn> {
+    None
+}
+
+#[cfg(unix)]
+fn resolve_hetgpu_gemm(symbol: &[u8]) -> Option<HetgpuGemmFn> {
+    let resolved = unsafe { libc::dlsym(libc::RTLD_DEFAULT, symbol.as_ptr() as *const _) };
+    if resolved.is_null() {
+        return None;
+    }
+
+    Some(unsafe { std::mem::transmute::<*mut libc::c_void, HetgpuGemmFn>(resolved) })
+}
+
+#[cfg(not(unix))]
+fn resolve_hetgpu_gemm(_symbol: &[u8]) -> Option<HetgpuGemmFn> {
+    None
+}
+
+fn try_hetgpu_sgemm(
+    backend: &str,
+    m: i32,
+    n: i32,
+    k: i32,
+    lda: i32,
+    ldb: i32,
+    ldc: i32,
+    alpha: f32,
+    a: &[f32],
+    b: &[f32],
+    beta: f32,
+    c: &[f32],
+) -> Option<Vec<f32>> {
+    let candidates: &[&[u8]] = match backend {
+        "ane" => &[
+            b"hetgpu_ane_gemm\0",
+            b"hetgpu_apple_ane_gemm\0",
+            b"hetgpu_apple_metal_gemm\0",
+        ],
+        "metal" => &[b"hetgpu_apple_metal_gemm\0", b"hetgpu_ane_gemm\0"],
+        "hetgpu" => &[
+            b"hetgpu_ane_gemm\0",
+            b"hetgpu_apple_metal_gemm\0",
+            b"hetgpu_apple_ane_gemm\0",
+        ],
+        _ => return None,
+    };
+
+    for candidate in candidates {
+        let Some(gemm) = resolve_hetgpu_gemm(candidate) else {
+            continue;
+        };
+
+        let mut output = c.to_vec();
+        let rc = unsafe {
+            gemm(
+                CUBLAS_OP_N,
+                CUBLAS_OP_N,
+                m,
+                n,
+                k,
+                alpha,
+                a.as_ptr().cast::<std::ffi::c_void>(),
+                HETGPU_CUDA_R_32F,
+                lda,
+                b.as_ptr().cast::<std::ffi::c_void>(),
+                HETGPU_CUDA_R_32F,
+                ldb,
+                beta,
+                output.as_mut_ptr().cast::<std::ffi::c_void>(),
+                HETGPU_CUDA_R_32F,
+                ldc,
+            )
+        };
+
+        if rc == CUDA_SUCCESS {
+            return Some(output);
+        }
+    }
+
+    None
+}
+
+fn try_legacy_apple_sgemm(
+    backend: &str,
+    m: i32,
+    n: i32,
+    k: i32,
+    lda: i32,
+    ldb: i32,
+    ldc: i32,
+    alpha: f32,
+    a: &[f32],
+    b: &[f32],
+    beta: f32,
+    c: &[f32],
+) -> Option<Vec<f32>> {
+    let candidates: &[&[u8]] = match backend {
+        "ane" => &[b"codifyone_ane_sgemm\0", b"codifyone_metal_sgemm\0"],
+        "metal" | "hetgpu" => &[b"codifyone_metal_sgemm\0"],
+        _ => return None,
+    };
+
+    for candidate in candidates {
+        let Some(sgemm) = resolve_legacy_apple_sgemm(candidate) else {
+            continue;
+        };
+
+        let mut output = c.to_vec();
+        let rc = unsafe {
+            sgemm(
+                a.as_ptr(),
+                b.as_ptr(),
+                c.as_ptr(),
+                output.as_mut_ptr(),
+                m,
+                n,
+                k,
+                lda,
+                ldb,
+                ldc,
+                alpha,
+                beta,
+            )
+        };
+
+        if rc == CUDA_SUCCESS {
+            return Some(output);
+        }
+    }
+
     None
 }
 
@@ -349,41 +499,14 @@ fn try_apple_sgemm(
     let ldc_i32 = i32::try_from(ldc).ok()?;
 
     let backend = std::env::var("WASM_CUDA_BACKEND").unwrap_or_else(|_| "metal".to_string());
-    let candidates: &[&[u8]] = match backend.as_str() {
-        "ane" => &[b"codifyone_ane_sgemm\0", b"codifyone_metal_sgemm\0"],
-        "metal" => &[b"codifyone_metal_sgemm\0"],
-        _ => return None,
-    };
-
-    for candidate in candidates {
-        let Some(sgemm) = resolve_apple_sgemm(candidate) else {
-            continue;
-        };
-
-        let mut output = c.to_vec();
-        let rc = unsafe {
-            sgemm(
-                a.as_ptr(),
-                b.as_ptr(),
-                c.as_ptr(),
-                output.as_mut_ptr(),
-                m_i32,
-                n_i32,
-                k_i32,
-                lda_i32,
-                ldb_i32,
-                ldc_i32,
-                alpha,
-                beta,
-            )
-        };
-
-        if rc == CUDA_SUCCESS {
-            return Some(output);
-        }
-    }
-
-    None
+    try_hetgpu_sgemm(
+        &backend, m_i32, n_i32, k_i32, lda_i32, ldb_i32, ldc_i32, alpha, a, b, beta, c,
+    )
+    .or_else(|| {
+        try_legacy_apple_sgemm(
+            &backend, m_i32, n_i32, k_i32, lda_i32, ldb_i32, ldc_i32, alpha, a, b, beta, c,
+        )
+    })
 }
 
 fn checked_positive_i32(value: i32) -> Option<usize> {
