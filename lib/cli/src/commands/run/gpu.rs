@@ -12,6 +12,7 @@ use super::Run;
 
 const CUDA_SUCCESS: i32 = 0;
 const CUDA_ERROR_INVALID_VALUE: i32 = 1;
+const CUDA_ERROR_NOT_SUPPORTED: i32 = 801;
 const CUDA_MEMCPY_HOST_TO_HOST: i32 = 0;
 const CUDA_MEMCPY_HOST_TO_DEVICE: i32 = 1;
 const CUDA_MEMCPY_DEVICE_TO_HOST: i32 = 2;
@@ -92,7 +93,30 @@ pub(super) fn module_has_cuda_imports(module: &Module) -> bool {
         import.module() == "env"
             && matches!(
                 import.name(),
-                "cudaMalloc"
+                "cuInit"
+                    | "cuDriverGetVersion"
+                    | "cuDeviceGetCount"
+                    | "cuDeviceGet"
+                    | "cuDeviceGetName"
+                    | "cuDeviceTotalMem_v2"
+                    | "cuDeviceGetAttribute"
+                    | "cuCtxCreate_v2"
+                    | "cuCtxDestroy_v2"
+                    | "cuCtxSetCurrent"
+                    | "cuCtxGetCurrent"
+                    | "cuCtxSynchronize"
+                    | "cuMemAlloc_v2"
+                    | "cuMemFree_v2"
+                    | "cuMemcpyHtoD_v2"
+                    | "cuMemcpyDtoH_v2"
+                    | "cuMemcpyDtoD_v2"
+                    | "cuModuleLoadData"
+                    | "cuModuleLoadDataEx"
+                    | "cuModuleUnload"
+                    | "cuModuleGetFunction"
+                    | "cuLaunchKernel"
+                    | "cuLaunchKernel_ptsz"
+                    | "cudaMalloc"
                     | "cudaFree"
                     | "cudaMemcpy"
                     | "cudaDeviceSynchronize"
@@ -157,6 +181,121 @@ fn module_has_imported_memory(module: &Module) -> bool {
 }
 
 fn define_cuda_imports(store: &mut Store, imports: &mut Imports, env: &FunctionEnv<CudaBridge>) {
+    imports.define(
+        "env",
+        "cuInit",
+        Function::new_typed_with_env(store, env, cu_init),
+    );
+    imports.define(
+        "env",
+        "cuDriverGetVersion",
+        Function::new_typed_with_env(store, env, cu_driver_get_version),
+    );
+    imports.define(
+        "env",
+        "cuDeviceGetCount",
+        Function::new_typed_with_env(store, env, cu_device_get_count),
+    );
+    imports.define(
+        "env",
+        "cuDeviceGet",
+        Function::new_typed_with_env(store, env, cu_device_get),
+    );
+    imports.define(
+        "env",
+        "cuDeviceGetName",
+        Function::new_typed_with_env(store, env, cu_device_get_name),
+    );
+    imports.define(
+        "env",
+        "cuDeviceTotalMem_v2",
+        Function::new_typed_with_env(store, env, cu_device_total_mem_v2),
+    );
+    imports.define(
+        "env",
+        "cuDeviceGetAttribute",
+        Function::new_typed_with_env(store, env, cu_device_get_attribute),
+    );
+    imports.define(
+        "env",
+        "cuCtxCreate_v2",
+        Function::new_typed_with_env(store, env, cu_ctx_create_v2),
+    );
+    imports.define(
+        "env",
+        "cuCtxDestroy_v2",
+        Function::new_typed_with_env(store, env, cu_ctx_destroy_v2),
+    );
+    imports.define(
+        "env",
+        "cuCtxSetCurrent",
+        Function::new_typed_with_env(store, env, cu_ctx_set_current),
+    );
+    imports.define(
+        "env",
+        "cuCtxGetCurrent",
+        Function::new_typed_with_env(store, env, cu_ctx_get_current),
+    );
+    imports.define(
+        "env",
+        "cuCtxSynchronize",
+        Function::new_typed_with_env(store, env, cu_ctx_synchronize),
+    );
+    imports.define(
+        "env",
+        "cuMemAlloc_v2",
+        Function::new_typed_with_env(store, env, cu_mem_alloc_v2),
+    );
+    imports.define(
+        "env",
+        "cuMemFree_v2",
+        Function::new_typed_with_env(store, env, cu_mem_free_v2),
+    );
+    imports.define(
+        "env",
+        "cuMemcpyHtoD_v2",
+        Function::new_typed_with_env(store, env, cu_memcpy_hto_d_v2),
+    );
+    imports.define(
+        "env",
+        "cuMemcpyDtoH_v2",
+        Function::new_typed_with_env(store, env, cu_memcpy_dto_h_v2),
+    );
+    imports.define(
+        "env",
+        "cuMemcpyDtoD_v2",
+        Function::new_typed_with_env(store, env, cu_memcpy_dto_d_v2),
+    );
+    imports.define(
+        "env",
+        "cuModuleLoadData",
+        Function::new_typed_with_env(store, env, cu_module_load_data),
+    );
+    imports.define(
+        "env",
+        "cuModuleLoadDataEx",
+        Function::new_typed_with_env(store, env, cu_module_load_data_ex),
+    );
+    imports.define(
+        "env",
+        "cuModuleUnload",
+        Function::new_typed_with_env(store, env, cu_module_unload),
+    );
+    imports.define(
+        "env",
+        "cuModuleGetFunction",
+        Function::new_typed_with_env(store, env, cu_module_get_function),
+    );
+    imports.define(
+        "env",
+        "cuLaunchKernel",
+        Function::new_typed_with_env(store, env, cu_launch_kernel),
+    );
+    imports.define(
+        "env",
+        "cuLaunchKernel_ptsz",
+        Function::new_typed_with_env(store, env, cu_launch_kernel),
+    );
     imports.define(
         "env",
         "cudaMalloc",
@@ -514,6 +653,206 @@ fn checked_positive_i32(value: i32) -> Option<usize> {
         return None;
     }
     usize::try_from(value).ok()
+}
+
+fn cu_init(_ctx: FunctionEnvMut<CudaBridge>, _flags: i32) -> i32 {
+    CUDA_SUCCESS
+}
+
+fn cu_driver_get_version(mut ctx: FunctionEnvMut<CudaBridge>, version_ptr: i32) -> i32 {
+    if write_guest_u32(&mut ctx, version_ptr, 12000).is_none() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    CUDA_SUCCESS
+}
+
+fn cu_device_get_count(mut ctx: FunctionEnvMut<CudaBridge>, count_ptr: i32) -> i32 {
+    if write_guest_u32(&mut ctx, count_ptr, 1).is_none() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    CUDA_SUCCESS
+}
+
+fn cu_device_get(mut ctx: FunctionEnvMut<CudaBridge>, device_ptr: i32, ordinal: i32) -> i32 {
+    if ordinal != 0 {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    if write_guest_u32(&mut ctx, device_ptr, 0).is_none() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    CUDA_SUCCESS
+}
+
+fn cu_device_get_name(
+    mut ctx: FunctionEnvMut<CudaBridge>,
+    name_ptr: i32,
+    len: i32,
+    _device: i32,
+) -> i32 {
+    let len = match checked_positive_i32(len) {
+        Some(len) if len > 0 => len,
+        _ => return CUDA_ERROR_INVALID_VALUE,
+    };
+    let mut name = b"hetGPU Apple PTX".to_vec();
+    if name.len() >= len {
+        name.truncate(len.saturating_sub(1));
+    }
+    name.push(0);
+    if write_guest_memory(&mut ctx, name_ptr, &name).is_none() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    CUDA_SUCCESS
+}
+
+fn cu_device_total_mem_v2(mut ctx: FunctionEnvMut<CudaBridge>, bytes_ptr: i32, _device: i32) -> i32 {
+    if write_guest_u32(&mut ctx, bytes_ptr, 512 * 1024 * 1024).is_none() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    CUDA_SUCCESS
+}
+
+fn cu_device_get_attribute(
+    mut ctx: FunctionEnvMut<CudaBridge>,
+    value_ptr: i32,
+    _attribute: i32,
+    _device: i32,
+) -> i32 {
+    if write_guest_u32(&mut ctx, value_ptr, 1).is_none() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    CUDA_SUCCESS
+}
+
+fn cu_ctx_create_v2(
+    mut ctx: FunctionEnvMut<CudaBridge>,
+    context_ptr: i32,
+    _flags: i32,
+    device: i32,
+) -> i32 {
+    if device != 0 {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    if write_guest_u32(&mut ctx, context_ptr, 1).is_none() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    CUDA_SUCCESS
+}
+
+fn cu_ctx_destroy_v2(_ctx: FunctionEnvMut<CudaBridge>, _context: i32) -> i32 {
+    CUDA_SUCCESS
+}
+
+fn cu_ctx_set_current(_ctx: FunctionEnvMut<CudaBridge>, _context: i32) -> i32 {
+    CUDA_SUCCESS
+}
+
+fn cu_ctx_get_current(mut ctx: FunctionEnvMut<CudaBridge>, context_ptr: i32) -> i32 {
+    if write_guest_u32(&mut ctx, context_ptr, 1).is_none() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    CUDA_SUCCESS
+}
+
+fn cu_ctx_synchronize(_ctx: FunctionEnvMut<CudaBridge>) -> i32 {
+    CUDA_SUCCESS
+}
+
+fn cu_mem_alloc_v2(ctx: FunctionEnvMut<CudaBridge>, device_ptr: i32, bytesize: i32) -> i32 {
+    cuda_malloc(ctx, device_ptr, bytesize)
+}
+
+fn cu_mem_free_v2(ctx: FunctionEnvMut<CudaBridge>, device_ptr: i32) -> i32 {
+    cuda_free(ctx, device_ptr)
+}
+
+fn cu_memcpy_hto_d_v2(
+    ctx: FunctionEnvMut<CudaBridge>,
+    dst_device: i32,
+    src_host: i32,
+    byte_count: i32,
+) -> i32 {
+    cuda_memcpy(
+        ctx,
+        dst_device,
+        src_host,
+        byte_count,
+        CUDA_MEMCPY_HOST_TO_DEVICE,
+    )
+}
+
+fn cu_memcpy_dto_h_v2(
+    ctx: FunctionEnvMut<CudaBridge>,
+    dst_host: i32,
+    src_device: i32,
+    byte_count: i32,
+) -> i32 {
+    cuda_memcpy(
+        ctx,
+        dst_host,
+        src_device,
+        byte_count,
+        CUDA_MEMCPY_DEVICE_TO_HOST,
+    )
+}
+
+fn cu_memcpy_dto_d_v2(
+    ctx: FunctionEnvMut<CudaBridge>,
+    dst_device: i32,
+    src_device: i32,
+    byte_count: i32,
+) -> i32 {
+    cuda_memcpy(
+        ctx,
+        dst_device,
+        src_device,
+        byte_count,
+        CUDA_MEMCPY_DEVICE_TO_DEVICE,
+    )
+}
+
+fn cu_module_load_data(_ctx: FunctionEnvMut<CudaBridge>, _module_ptr: i32, _image_ptr: i32) -> i32 {
+    CUDA_ERROR_NOT_SUPPORTED
+}
+
+fn cu_module_load_data_ex(
+    ctx: FunctionEnvMut<CudaBridge>,
+    module_ptr: i32,
+    image_ptr: i32,
+    _num_options: i32,
+    _options: i32,
+    _option_values: i32,
+) -> i32 {
+    cu_module_load_data(ctx, module_ptr, image_ptr)
+}
+
+fn cu_module_unload(_ctx: FunctionEnvMut<CudaBridge>, _module: i32) -> i32 {
+    CUDA_SUCCESS
+}
+
+fn cu_module_get_function(
+    _ctx: FunctionEnvMut<CudaBridge>,
+    _function_ptr: i32,
+    _module: i32,
+    _name_ptr: i32,
+) -> i32 {
+    CUDA_ERROR_NOT_SUPPORTED
+}
+
+fn cu_launch_kernel(
+    _ctx: FunctionEnvMut<CudaBridge>,
+    _function: i32,
+    _grid_dim_x: i32,
+    _grid_dim_y: i32,
+    _grid_dim_z: i32,
+    _block_dim_x: i32,
+    _block_dim_y: i32,
+    _block_dim_z: i32,
+    _shared_mem_bytes: i32,
+    _stream: i32,
+    _kernel_params: i32,
+    _extra: i32,
+) -> i32 {
+    CUDA_ERROR_NOT_SUPPORTED
 }
 
 fn cuda_malloc(mut ctx: FunctionEnvMut<CudaBridge>, dev_ptr: i32, size: i32) -> i32 {
