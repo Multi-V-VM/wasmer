@@ -320,7 +320,10 @@ impl<W: WritableJournal> WritableJournal for FilteredJournalTx<W> {
                 }
                 entry
             }
-            JournalEntry::SnapshotV1 { .. } => {
+            JournalEntry::SnapshotV1 { .. }
+            | JournalEntry::MvvmCheckpointV1 { .. }
+            | JournalEntry::MvvmIncrementalCheckpointV1 { .. }
+            | JournalEntry::MigrationRequestV1 { .. } => {
                 if self.config.filter_snapshots {
                     return Ok(LogWriteResult {
                         record_start: 0,

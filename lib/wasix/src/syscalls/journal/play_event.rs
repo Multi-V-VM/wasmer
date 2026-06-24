@@ -851,6 +851,11 @@ impl<'a> JournalSyscallPlayer<'a, '_> {
                         .map_err(anyhow_err_to_runtime_err)?
                 }
             }
+            JournalEntry::MvvmCheckpointV1 { .. }
+            | JournalEntry::MvvmIncrementalCheckpointV1 { .. }
+            | JournalEntry::MigrationRequestV1 { .. } => {
+                tracing::trace!("Replay journal - ignoring MVVM migration marker");
+            }
         }
         Ok(())
     }

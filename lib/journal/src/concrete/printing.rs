@@ -350,6 +350,38 @@ impl fmt::Display for JournalEntry<'_> {
             JournalEntry::SnapshotV1 { when, trigger } => {
                 write!(f, "snapshot (when={when:?}, trigger={trigger:?})")
             }
+            JournalEntry::MvvmCheckpointV1 {
+                version,
+                source_arch,
+                module_hash,
+                checkpoint_data,
+                when,
+            } => write!(
+                f,
+                "mvvm-checkpoint (version={version}, arch={source_arch}, hash.len={}, data.len={}, when={when:?})",
+                module_hash.len(),
+                checkpoint_data.len()
+            ),
+            JournalEntry::MvvmIncrementalCheckpointV1 {
+                base_checkpoint_id,
+                memory_delta,
+                stack_delta,
+                when,
+            } => write!(
+                f,
+                "mvvm-incremental-checkpoint (base={base_checkpoint_id}, memory-delta.len={}, stack-delta.len={}, when={when:?})",
+                memory_delta.len(),
+                stack_delta.len()
+            ),
+            JournalEntry::MigrationRequestV1 {
+                target_arch,
+                target_endpoint,
+                priority,
+                when,
+            } => write!(
+                f,
+                "mvvm-migration-request (target-arch={target_arch}, endpoint={target_endpoint}, priority={priority}, when={when:?})"
+            ),
         }
     }
 }

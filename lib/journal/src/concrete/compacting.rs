@@ -808,7 +808,10 @@ impl WritableJournal for CompactingJournalTx {
             | JournalEntry::PortRouteClearV1
             | JournalEntry::PortRouteDelV1 { .. }
             | JournalEntry::CreateSymbolicLinkV1 { .. }
-            | JournalEntry::CreateHardLinkV1 { .. } => {
+            | JournalEntry::CreateHardLinkV1 { .. }
+            | JournalEntry::MvvmCheckpointV1 { .. }
+            | JournalEntry::MvvmIncrementalCheckpointV1 { .. }
+            | JournalEntry::MigrationRequestV1 { .. } => {
                 state.whitelist.insert(event_index);
             }
         }

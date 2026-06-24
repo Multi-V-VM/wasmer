@@ -406,6 +406,9 @@ impl JournalEntry<'_> {
             Self::SocketSetOptTimeV1 { .. } => JournalEntryRecordType::SocketSetOptTimeV1,
             Self::SocketShutdownV1 { .. } => JournalEntryRecordType::SocketShutdownV1,
             Self::SnapshotV1 { .. } => JournalEntryRecordType::SnapshotV1,
+            Self::MvvmCheckpointV1 { .. }
+            | Self::MvvmIncrementalCheckpointV1 { .. }
+            | Self::MigrationRequestV1 { .. } => JournalEntryRecordType::SnapshotV1,
         }
     }
 
@@ -987,6 +990,13 @@ impl JournalEntry<'_> {
                 },
                 serializer,
             ),
+            JournalEntry::MvvmCheckpointV1 { .. }
+            | JournalEntry::MvvmIncrementalCheckpointV1 { .. }
+            | JournalEntry::MigrationRequestV1 { .. } => {
+                return Err(anyhow::format_err!(
+                    "MVVM journal entries are not supported by the rkyv archive writer yet"
+                ));
+            }
         }
         .map_err(|err| anyhow::format_err!("failed to serialize journal record - {err}"))?;
         Ok(amt)
