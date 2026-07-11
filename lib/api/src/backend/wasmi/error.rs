@@ -73,7 +73,11 @@ impl Trap {
                 let mut data = unsafe { std::mem::zeroed() };
                 // let x = format!("")
                 let s1 = format!("🐛{err_ptr:p}");
-                let _s = s1.into_bytes().into_boxed_slice();
+                let mut bytes = s1.into_bytes();
+                // wasmi's C API follows wasm-c-api and requires trap messages
+                // to include their trailing NUL in wasm_name_t.
+                bytes.push(0);
+                let _s = bytes.into_boxed_slice();
                 unsafe {
                     wasm_byte_vec_new(&mut data, _s.len(), _s.as_ptr() as _);
                 }
